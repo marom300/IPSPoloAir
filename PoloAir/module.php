@@ -231,11 +231,12 @@ class PoloAir extends IPSModule
     }
 
     /**
-     * Baut eine Testverbindung auf und liefert eine Zusammenfassung.
+     * Baut eine Testverbindung auf und liefert eine Schritt-für-Schritt-Diagnose.
      */
     public function TestConnection(): string
     {
         $host = trim($this->ReadPropertyString('Host'));
+        $port = $this->ReadPropertyInteger('Port');
         if ($host === '') {
             return 'Bitte zuerst die IP-Adresse konfigurieren.';
         }
@@ -243,31 +244,93 @@ class PoloAir extends IPSModule
             return 'Modbus-Zugriff belegt, bitte erneut versuchen.';
         }
         try {
-            $sock = $this->mbConnect();
-            if ($sock === false) {
-                return "Keine Verbindung zu {$host}:{$this->ReadPropertyInteger('Port')} möglich.";
-            }
-            try {
-                $off = $this->detectOffset($sock);
-                $out = "Verbunden mit {$host}:{$this->ReadPropertyInteger('Port')} (Adress-Offset {$off})\n";
+            // Gemerkten Adress-Offset verwerfen -> Erkennung läuft sichtbar neu
+            $this->WriteAttributeInteger('AddrOffset', -99);
 
-                $fw = $this->mbRead($sock, 1000 + $off, 2);
-                if ($fw !== null) {
-                    $out .= 'Firmware: ' . $this->fwString(($fw[0] << 16) | $fw[1]) . "\n";
+            $errno = 0;
+            $errstr = '';
+            $sock = @fsockopen($host, $port, $errno, $errstr, 3);
+            if ($sock === false) {
+                return "1) TCP-Verbindung zu {$host}:{$port}: FEHLGESCHLAGEN ({$errstr} / {$errno})\n" .
+                    "-> IP/Port prüfen. Wichtig: Der Test muss vom Symcon-Rechner aus klappen, nicht nur vom PC.";
+            }
+            stream_set_timeout($sock, 3);
+            $out = "1) TCP-Verbindung zu {$host}:{$port}: OK\n";
+            $out .= '   Unit-ID: ' . $this->ReadPropertyInteger('UnitID') . "\n\n";
+
+            try {
+                // 2) Einzelregister-Test mit beiden Adress-Offsets
+                $out .= "2) Einzelregister-Test (Register 30 = Jahr, erwartet 2016–2099):\n";
+                $found = null;
+                foreach ([-1, 0] as $off) {
+                    $err = '';
+                    $r = $this->mbRead($sock, 30 + $off, 1, $err);
+                    if ($r === null) {
+                        $out .= "   Offset {$off}: {$err}\n";
+                    } else {
+                        $ok = ($r[0] >= 2016 && $r[0] <= 2099);
+                        $out .= "   Offset {$off}: Wert {$r[0]}" . ($ok ? ' -> PASST' : ' (unplausibel)') . "\n";
+                        if ($ok && $found === null) {
+                            $found = $off;
+                        }
+                    }
                 }
-                $m = $this->mbRead($sock, 1 + $off, 5);
-                if ($m !== null) {
-                    $out .= 'Gerät: ' . ($m[0] ? 'AN' : 'AUS') . ', Modus: ' . $this->modeName($m[4]) . "\n";
+                if ($found === null) {
+                    $out .= "   -> Kein Offset lieferte ein plausibles Jahr.\n" .
+                        "      Mögliche Ursachen: anderes Gerät auf dieser IP, falsche Unit-ID,\n" .
+                        "      oder ein anderer Modbus-Client blockiert die Steuerung\n" .
+                        "      (Weboberfläche/andere Clients testweise schließen, Gerät kurz stromlos machen).\n";
+                    // Trotzdem weiter testen mit -1
+                    $found = -1;
+                } else {
+                    $this->WriteAttributeInteger('AddrOffset', $found);
                 }
-                $t = $this->mbRead($sock, 902 + $off, 3);
-                if ($t !== null) {
-                    $out .= sprintf(
-                        "Zuluft %.1f °C, Abluft %.1f °C, Außenluft %.1f °C\n",
-                        $this->s16($t[0]) / 10,
-                        $this->s16($t[1]) / 10,
-                        $this->s16($t[2]) / 10
-                    );
+                $off = $found;
+                $out .= "   Verwendeter Adress-Offset: {$off}\n\n";
+
+                // 3) Wichtige Einzelwerte
+                $out .= "3) Einzelwerte:\n";
+                $tests = [
+                    [1, 'Ein/Aus (Reg 1)'],
+                    [5, 'Modus (Reg 5)'],
+                    [902, 'Zuluft-Temp (Reg 902)'],
+                    [904, 'Außen-Temp (Reg 904)'],
+                    [1000, 'Firmware (Reg 1000)']
+                ];
+                foreach ($tests as [$reg, $name]) {
+                    $err = '';
+                    $r = $this->mbRead($sock, $reg + $off, 1, $err);
+                    if ($r === null) {
+                        $out .= "   {$name}: {$err}\n";
+                    } else {
+                        $extra = '';
+                        if ($reg === 5) {
+                            $extra = ' = ' . $this->modeName($r[0]);
+                        } elseif ($reg === 902 || $reg === 904) {
+                            $extra = sprintf(' = %.1f °C', $this->s16($r[0]) / 10);
+                        }
+                        $out .= "   {$name}: {$r[0]}{$extra}\n";
+                    }
                 }
+                $out .= "\n";
+
+                // 4) Blockgrößen-Test (manche Firmwares lehnen große Blöcke ab)
+                $out .= "4) Block-Lesetest:\n";
+                $blocks = [
+                    [1, 12, 'Hauptkontrolle klein (Reg 1, 12 Register)'],
+                    [1, 34, 'Hauptkontrolle groß (Reg 1, 34 Register)'],
+                    [900, 13, 'Überwachung klein (Reg 900, 13 Register)'],
+                    [900, 27, 'Überwachung groß (Reg 900, 27 Register)'],
+                    [600, 11, 'Alarme (Reg 600, 11 Register)'],
+                    [100, 46, 'Einstellungsmodi (Reg 100, 46 Register)'],
+                    [927, 19, 'Verbrauch (Reg 927, 19 Register)']
+                ];
+                foreach ($blocks as [$start, $qty, $name]) {
+                    $err = '';
+                    $r = $this->mbRead($sock, $start + $off, $qty, $err);
+                    $out .= '   ' . $name . ': ' . ($r === null ? $err : 'OK') . "\n";
+                }
+
                 return $out;
             } finally {
                 fclose($sock);
@@ -879,8 +942,9 @@ class PoloAir extends IPSModule
     /**
      * Liest $qty Holding-Register (FC 03) ab Adresse $addr.
      * Rückgabe: Array der Rohwerte (unsigned 16 Bit) oder null bei Fehler.
+     * $err enthält dann eine Klartext-Ursache (für die Diagnose).
      */
-    private function mbRead($sock, int $addr, int $qty): ?array
+    private function mbRead($sock, int $addr, int $qty, ?string &$err = null): ?array
     {
         $tid = random_int(1, 0xFFFF);
         $unit = $this->ReadPropertyInteger('UnitID');
@@ -888,30 +952,37 @@ class PoloAir extends IPSModule
         $adu = pack('nnnC', $tid, 0, strlen($pdu) + 1, $unit) . $pdu;
 
         if (@fwrite($sock, $adu) === false) {
-            $this->SendDebug('Modbus', 'Schreibfehler auf Socket', 0);
+            $err = 'Schreibfehler auf Socket';
+            $this->SendDebug('Modbus', $err, 0);
             return null;
         }
 
         $hdr = $this->readBytes($sock, 7);
         if ($hdr === null) {
+            $err = 'Timeout – keine Antwort';
             $this->SendDebug('Modbus', "Timeout (FC3 Adr {$addr})", 0);
             return null;
         }
         $h = unpack('ntid/nproto/nlen/Cunit', $hdr);
         $body = $this->readBytes($sock, $h['len'] - 1);
         if ($body === null || strlen($body) < 2) {
+            $err = 'Antwort unvollständig';
             return null;
         }
 
         $rfc = ord($body[0]);
         if ($rfc & 0x80) {
-            $this->SendDebug('Modbus', 'Exception Code ' . ord($body[1]) . " (FC3 Adr {$addr})", 0);
+            $code = ord($body[1]);
+            $names = [1 => 'Illegal Function', 2 => 'Illegal Data Address', 3 => 'Illegal Data Value', 4 => 'Device Failure', 6 => 'Device Busy'];
+            $err = 'Modbus-Exception ' . $code . (isset($names[$code]) ? ' (' . $names[$code] . ')' : '');
+            $this->SendDebug('Modbus', $err . " (FC3 Adr {$addr})", 0);
             return null;
         }
 
         $count = ord($body[1]);
         $data = substr($body, 2, $count);
         if (strlen($data) < $count) {
+            $err = 'Datenteil unvollständig';
             return null;
         }
         return array_values(unpack('n*', $data));
