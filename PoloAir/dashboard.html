@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POLO-AIR – Wohnraumlüftung</title>
+<style>
+:root{
+  --bg:#0e1217;
+  --card:#161c24;
+  --card2:#1c242e;
+  --line:#2a3441;
+  --txt:#e8edf3;
+  --dim:#8b97a5;
+  --fresh:#4dc3f4;   /* Außenluft */
+  --sup:#7ccf6e;     /* Zuluft */
+  --ext:#f4a94d;     /* Abluft */
+  --heat:#f4764d;
+  --ok:#3ddc84;
+  --warn:#ffd166;
+  --err:#ff5a5a;
+  --pipe-idle:#48535f;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg);color:var(--txt);
+  font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  min-height:100dvh;display:flex;flex-direction:column;
+}
+.app{flex:1;display:flex;flex-direction:column;gap:10px;padding:12px;max-width:1500px;margin:0 auto;width:100%}
+
+header{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.title{font-size:clamp(14px,1.8vw,18px);font-weight:700;letter-spacing:.3px;white-space:nowrap}
+.title small{color:var(--dim);font-weight:400;margin-left:6px}
+.badges{display:flex;gap:4px;flex-wrap:wrap;flex:1}
+.badge{display:flex;align-items:center;gap:4px;padding:2px 7px;border-radius:999px;white-space:nowrap;
+  background:var(--card);border:1px solid var(--line);font-size:11px;color:var(--dim)}
+.badge .dot{width:6px;height:6px;border-radius:50%;background:var(--line);flex:none}
+.badge.on{color:var(--txt);border-color:rgba(61,220,132,.4)}
+.badge.on .dot{background:var(--ok);box-shadow:0 0 6px var(--ok)}
+.badge.on.b-heat{border-color:rgba(244,118,77,.5)}   .badge.on.b-heat .dot{background:var(--heat);box-shadow:0 0 6px var(--heat)}
+.badge.on.b-cool{border-color:rgba(77,195,244,.5)}   .badge.on.b-cool .dot{background:var(--fresh);box-shadow:0 0 6px var(--fresh)}
+.badge.on.b-sup{border-color:rgba(124,207,110,.5)}   .badge.on.b-sup .dot{background:var(--sup);box-shadow:0 0 6px var(--sup)}
+.badge.on.b-err{border-color:rgba(255,90,90,.6);color:#ffb3b3} .badge.on.b-err .dot{background:var(--err);box-shadow:0 0 6px var(--err)}
+select{
+  background:var(--card);color:var(--txt);border:1px solid var(--line);
+  border-radius:9px;padding:5px 8px;font-size:12px;outline:none;cursor:pointer
+}
+.pwr{background:var(--card);border:1px solid var(--line);border-radius:9px;color:var(--dim);
+  padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap}
+.pwr.on{color:var(--ok);border-color:rgba(61,220,132,.5)}
+.pwr:disabled{opacity:.5;cursor:default}
+.stamp{color:var(--dim);font-size:11px;white-space:nowrap}
+.stamp.stale{color:var(--err);font-weight:700;font-size:12px}
+@media (max-width:1280px){.stamp{display:none}.stamp.stale{display:inline}}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px}
+.schema{padding:6px 10px}
+.schema svg{display:block;width:100%;height:auto;max-height:44dvh}
+
+/* ---------- SVG ---------- */
+text{font-family:inherit;fill:var(--txt)}
+.lbl{fill:var(--dim);font-size:13px}
+.lbl-s{fill:var(--dim);font-size:11px}
+.big{font-size:23px;font-weight:700}
+.mid{font-size:16px;font-weight:600}
+.unit-box{fill:var(--card2);stroke:var(--line);stroke-width:1.5}
+.panel{fill:var(--card2);stroke:var(--line);stroke-width:1.5}
+.pipe{fill:none;stroke:var(--pipe-idle);stroke-width:11;stroke-linecap:round;stroke-linejoin:round;transition:stroke .6s}
+body.fan-on .pipe.p-fresh{stroke:var(--fresh)}
+body.fan-on .pipe.p-sup{stroke:var(--sup)}
+body.fan-on .pipe.p-ext{stroke:var(--ext)}
+body.fan-on .pipe.p-fort{stroke:#5b6672}
+.flow{fill:none;stroke:rgba(255,255,255,.75);stroke-width:2.6;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:5 17;opacity:0;transition:opacity .6s}
+.flow.on{opacity:.85;animation:flowmove 1.4s linear infinite}
+@keyframes flowmove{to{stroke-dashoffset:-22}}
+.chip rect{fill:#0b0f14;stroke:var(--line);stroke-width:1}
+.chip text{font-size:14px;font-weight:600}
+.chip .cl{fill:var(--dim);font-weight:400;font-size:11px}
+.fanblade{fill:#39434f;transition:fill .5s}
+body.fan-on .fanblade{fill:#9fb2c4}
+.fangroup{transform-box:fill-box;transform-origin:center}
+body.fan-on .fangroup{animation:spin 2.4s linear infinite}
+.rotorgroup{transform-box:fill-box;transform-origin:center}
+body.rotor-on .rotorgroup{animation:spin 7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.rotorseg{stroke:#39434f;stroke-width:2.4;transition:stroke .5s}
+body.rotor-on .rotorseg{stroke:#7e93a8}
+.bypass{opacity:0;transition:opacity .6s}
+body.bypass .bypass{opacity:1}
+.heater{opacity:.15;transition:opacity .5s}
+body.heat-on .heater{opacity:1}
+.filt-ok{fill:var(--ok)} .filt-warn{fill:var(--warn)} .filt-bad{fill:var(--err)}
+
+/* ---------- Kacheln ---------- */
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(235px,1fr));gap:10px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:8px;container-type:inline-size}
+.tile h3{font-size:12px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;
+  display:flex;align-items:center;gap:6px}
+.tile h3 .ico{font-size:14px}
+.kv{display:flex;justify-content:space-between;align-items:baseline;font-size:13px}
+.kv .k{color:var(--dim)}
+.kv .v{font-weight:600;font-variant-numeric:tabular-nums}
+.hero{font-size:clamp(22px,9cqi,30px);font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.hero small{font-size:.5em;color:var(--dim);font-weight:400}
+.sub{color:var(--dim);font-size:12px}
+.row2{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.stepper{display:flex;align-items:center;gap:2px;background:var(--card2);border:1px solid var(--line);border-radius:9px;overflow:hidden}
+.stepper button{background:none;border:none;color:var(--txt);width:30px;height:30px;font-size:16px;cursor:pointer}
+.stepper button:hover{background:var(--line)}
+.stepper button:disabled{color:var(--line);cursor:default}
+.stepper .val{min-width:70px;text-align:center;font-weight:600;font-size:13px;font-variant-numeric:tabular-nums}
+.toggle{background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--dim);
+  padding:5px 8px;font-size:12px;cursor:pointer;white-space:nowrap;flex:1}
+.toggle.on{color:var(--txt);border-color:rgba(61,220,132,.5);background:rgba(61,220,132,.08)}
+.toggle:disabled{cursor:default;opacity:.5}
+.sep{border-top:1px solid var(--line);margin:2px 0}
+.err-tile{border-color:rgba(255,90,90,.6)}
+.res-ok{color:var(--ok)} .res-warn{color:var(--warn)} .res-bad{color:var(--err)}
+.bar{height:9px;border-radius:5px;background:var(--card2);border:1px solid var(--line);overflow:hidden}
+.bar i{display:block;height:100%;width:0%;background:var(--ok);transition:width .6s,background .6s}
+
+/* Seiten-Umschalter */
+.nav{display:flex;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden;flex:none}
+.nav button{background:none;border:none;color:var(--dim);padding:5px 12px;font-size:12px;cursor:pointer;white-space:nowrap}
+.nav button.active{background:var(--card2);color:var(--txt);font-weight:600}
+.tiles.tiles-lg{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+#pageAnlage{display:flex;flex-direction:column;gap:10px}
+@media (max-height:1000px){
+  .tile{padding:10px 12px;gap:6px}
+  .hero{font-size:clamp(20px,7cqi,26px)}
+}
+
+/* PIN-Dialog */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);display:none;align-items:center;justify-content:center;z-index:60}
+.overlay.show{display:flex}
+.pinbox{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px;
+  display:flex;flex-direction:column;gap:12px;width:min(300px,88vw)}
+.pintitle{font-weight:600;font-size:14px;text-align:center}
+.pindisplay{background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--txt);
+  min-height:46px;display:flex;align-items:center;justify-content:center;font-size:26px;letter-spacing:12px}
+.pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.pinpad button{background:var(--card2);border:1px solid var(--line);border-radius:11px;color:var(--txt);
+  font-size:22px;font-weight:600;padding:16px 0;cursor:pointer;user-select:none;-webkit-user-select:none;
+  -webkit-tap-highlight-color:transparent}
+.pinpad button:active{background:var(--line)}
+.pinpad button.ok{background:rgba(61,220,132,.12);border-color:rgba(61,220,132,.5);color:var(--ok)}
+.pinpad button.del{font-size:20px}
+
+/* Rückmeldungs-Toast (alert() wird im IPSView-WebView verschluckt) */
+#toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:70;
+  background:#3a1518;border:1px solid var(--err);color:#ffd7d7;padding:9px 18px;
+  border-radius:10px;font-size:14px;font-weight:600;opacity:0;pointer-events:none;
+  transition:opacity .3s;max-width:90vw}
+#toast.ok{background:#12321f;border-color:var(--ok);color:#c9f5db}
+#toast.show{opacity:1}
+footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
+@media (max-width:640px){
+  .schema svg{max-height:none}
+  .stamp{display:none}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<header>
+  <div class="title">POLO-AIR<small>Wohnraumlüftung</small></div>
+  <div class="nav">
+    <button id="navAnlage" onclick="switchPage('anlage')">Anlage</button>
+    <button id="navDetails" onclick="switchPage('details')">Details</button>
+  </div>
+  <div class="badges" id="badges"></div>
+  <button class="pwr" id="btnPower" onclick="setVal('Power', !D.Power)">–</button>
+  <select id="selModus" onchange="setVal('Modus',parseInt(this.value))">
+    <option value="1">Abwesend</option>
+    <option value="2">Normal</option>
+    <option value="3">Intensiv</option>
+    <option value="4">Boost</option>
+  </select>
+  <div class="stamp" id="stamp">–</div>
+</header>
+
+<div id="pageAnlage">
+
+<section class="card schema">
+<svg viewBox="0 0 1120 430" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+
+  <!-- ===== Luftkanäle ===== -->
+  <!-- Außenluft: von draußen ins Gerät -->
+  <path class="pipe p-fresh" d="M45,140 H340"/>
+  <!-- Fortluft: vom Gerät nach draußen -->
+  <path class="pipe p-fort" d="M340,315 H45"/>
+  <!-- Zuluft: vom Gerät ins Haus -->
+  <path class="pipe p-sup" d="M650,140 H905"/>
+  <!-- Abluft: vom Haus ins Gerät -->
+  <path class="pipe p-ext" d="M905,315 H650"/>
+
+  <!-- Fluss-Overlays (in Strömungsrichtung gezeichnet) -->
+  <path id="f_fresh" class="flow" d="M45,140 H340"/>
+  <path id="f_fort"  class="flow" d="M340,315 H45"/>
+  <path id="f_sup"   class="flow" d="M650,140 H905"/>
+  <path id="f_ext"   class="flow" d="M905,315 H650"/>
+
+  <!-- ===== Lüftungsgerät ===== -->
+  <g>
+    <rect x="340" y="55" width="310" height="335" rx="16" class="unit-box"/>
+    <text x="495" y="83" text-anchor="middle" class="mid" id="unitname">POLO-AIR</text>
+
+    <!-- Filter im Außenluft-Pfad -->
+    <g id="filtersym">
+      <rect x="360" y="118" width="16" height="44" rx="3" fill="#0b0f14" stroke="var(--line)"/>
+      <path d="M364,122 v36 M368,122 v36 M372,122 v36" stroke="#5c6a79" stroke-width="1.4"/>
+      <circle id="filterdot" cx="368" cy="108" r="5" class="filt-ok"/>
+    </g>
+
+    <!-- Rotations-Wärmetauscher -->
+    <g class="rotorgroup">
+      <circle cx="495" cy="227" r="72" fill="#10151b" stroke="var(--line)" stroke-width="1.5"/>
+      <g id="rotor">
+        <line class="rotorseg" x1="495" y1="157" x2="495" y2="297"/>
+        <line class="rotorseg" x1="425" y1="227" x2="565" y2="227"/>
+        <line class="rotorseg" x1="446" y1="178" x2="544" y2="276"/>
+        <line class="rotorseg" x1="544" y1="178" x2="446" y2="276"/>
+        <line class="rotorseg" x1="468" y1="162" x2="522" y2="292"/>
+        <line class="rotorseg" x1="522" y1="162" x2="468" y2="292"/>
+        <line class="rotorseg" x1="430" y1="200" x2="560" y2="254"/>
+        <line class="rotorseg" x1="560" y1="200" x2="430" y2="254"/>
+        <circle cx="495" cy="227" r="10" fill="#5c6a79"/>
+      </g>
+    </g>
+    <text x="495" y="322" text-anchor="middle" class="lbl-s">Wärmetauscher <tspan id="v_wt">–</tspan></text>
+
+    <!-- Bypass (freie Kühlung) -->
+    <g class="bypass">
+      <path d="M368,128 C 400,92 590,92 622,128" fill="none" stroke="var(--fresh)" stroke-width="4" stroke-dasharray="7 6" stroke-linecap="round"/>
+      <text x="495" y="104" text-anchor="middle" class="lbl-s" fill="var(--fresh)">Bypass</text>
+    </g>
+
+    <!-- Nachheizer im Zuluft-Pfad -->
+    <g class="heater">
+      <path d="M598,128 l6,10 l-8,6 l8,6 l-6,10" fill="none" stroke="var(--heat)" stroke-width="2.4" stroke-linecap="round"/>
+    </g>
+
+    <!-- Ventilatoren -->
+    <g class="fangroup">
+      <circle cx="612" cy="140" r="26" fill="#10151b" stroke="var(--line)" stroke-width="1.5"/>
+      <g>
+        <path class="fanblade" d="M612,137 C608,131 608,122 612,118 C616,122 616,131 612,137 Z"/>
+        <path class="fanblade" d="M612,137 C608,131 608,122 612,118 C616,122 616,131 612,137 Z" transform="rotate(90 612 140)"/>
+        <path class="fanblade" d="M612,137 C608,131 608,122 612,118 C616,122 616,131 612,137 Z" transform="rotate(180 612 140)"/>
+        <path class="fanblade" d="M612,137 C608,131 608,122 612,118 C616,122 616,131 612,137 Z" transform="rotate(270 612 140)"/>
+        <circle cx="612" cy="140" r="5" fill="#5c6a79"/>
+      </g>
+    </g>
+    <g class="fangroup">
+      <circle cx="378" cy="315" r="26" fill="#10151b" stroke="var(--line)" stroke-width="1.5"/>
+      <g>
+        <path class="fanblade" d="M378,312 C374,306 374,297 378,293 C382,297 382,306 378,312 Z"/>
+        <path class="fanblade" d="M378,312 C374,306 374,297 378,293 C382,297 382,306 378,312 Z" transform="rotate(90 378 315)"/>
+        <path class="fanblade" d="M378,312 C374,306 374,297 378,293 C382,297 382,306 378,312 Z" transform="rotate(180 378 315)"/>
+        <path class="fanblade" d="M378,312 C374,306 374,297 378,293 C382,297 382,306 378,312 Z" transform="rotate(270 378 315)"/>
+        <circle cx="378" cy="315" r="5" fill="#5c6a79"/>
+      </g>
+    </g>
+    <text x="612" y="182" text-anchor="middle" class="lbl-s" id="v_supfan">–</text>
+    <text x="378" y="360" text-anchor="middle" class="lbl-s" id="v_extfan">–</text>
+  </g>
+
+  <!-- ===== Außen-Chips ===== -->
+  <g class="chip">
+    <rect x="65" y="82" width="150" height="34" rx="17"/>
+    <text x="140" y="104" text-anchor="middle"><tspan class="cl">Außen </tspan><tspan id="v_aussen">–</tspan></text>
+  </g>
+  <text x="140" y="170" text-anchor="middle" class="lbl-s">Außenluft</text>
+  <text x="140" y="345" text-anchor="middle" class="lbl-s">Fortluft</text>
+
+  <!-- ===== Zuluft/Abluft-Chips ===== -->
+  <g class="chip">
+    <rect x="685" y="82" width="185" height="34" rx="17"/>
+    <text x="777" y="104" text-anchor="middle"><tspan class="cl">Zuluft </tspan><tspan id="v_zuluft">–</tspan><tspan class="cl" id="v_zuflow"></tspan></text>
+  </g>
+  <g class="chip">
+    <rect x="685" y="338" width="185" height="34" rx="17"/>
+    <text x="777" y="360" text-anchor="middle"><tspan class="cl">Abluft </tspan><tspan id="v_abluft">–</tspan><tspan class="cl" id="v_abflow"></tspan></text>
+  </g>
+
+  <!-- ===== Haus ===== -->
+  <g>
+    <path d="M905,120 L1000,58 L1095,120 V370 A12,12 0 0 1 1083,382 H917 A12,12 0 0 1 905,370 Z" class="panel"/>
+    <text x="1000" y="150" text-anchor="middle" class="lbl-s">Wohnraum</text>
+    <text x="1000" y="196" text-anchor="middle" class="big" id="v_raum">–</text>
+    <text x="1000" y="222" text-anchor="middle" class="lbl-s" id="v_feuchte">–</text>
+    <text x="1000" y="244" text-anchor="middle" class="lbl-s" id="v_aq">–</text>
+  </g>
+
+</svg>
+</section>
+
+<section class="tiles">
+
+  <div class="tile" id="tileBetrieb">
+    <h3><span class="ico">🌀</span>Betrieb</h3>
+    <div class="hero" id="t_modus">–</div>
+    <div class="sub" id="t_status">–</div>
+    <div class="row2">
+      <button class="toggle" id="btnEco" onclick="setVal('EcoMode',!D.EcoMode)">ECO</button>
+      <button class="toggle" id="btnAuto" onclick="setVal('AutoMode',!D.AutoMode)">AUTO</button>
+    </div>
+    <div class="kv"><span class="k">Nächster Modus</span><span class="v" id="t_next">–</span></div>
+  </div>
+
+  <div class="tile" id="tileLuft">
+    <h3><span class="ico">💨</span>Luftmengen</h3>
+    <div class="kv"><span class="k">Zuluft</span><span class="v" id="t_zuluft">–</span></div>
+    <div class="kv"><span class="k">Zuluft-Ventilator</span><span class="v" id="t_supfan">–</span></div>
+    <div class="sep"></div>
+    <div class="kv"><span class="k">Abluft</span><span class="v" id="t_abluft">–</span></div>
+    <div class="kv"><span class="k">Abluft-Ventilator</span><span class="v" id="t_extfan">–</span></div>
+    <div class="kv" id="row_klappen"><span class="k">Luftklappen</span><span class="v" id="t_klappen">–</span></div>
+  </div>
+
+  <div class="tile" id="tileWRG">
+    <h3><span class="ico">♻️</span>Wärmerückgewinnung</h3>
+    <div class="hero"><span id="t_eff">–</span><small> Effizienz</small></div>
+    <div class="kv"><span class="k">Rückgewinnung</span><span class="v" id="t_rueck">–</span></div>
+    <div class="kv"><span class="k">Wärmetauscher</span><span class="v" id="t_wt">–</span></div>
+    <div class="kv"><span class="k">Energie sparen</span><span class="v" id="t_sparen">–</span></div>
+  </div>
+
+  <div class="tile" id="tileEnergie">
+    <h3><span class="ico">⚡</span>Energie</h3>
+    <div class="hero"><span id="t_leistung">–</span></div>
+    <div class="kv"><span class="k">Verbrauch heute</span><span class="v" id="t_vtag">–</span></div>
+    <div class="kv"><span class="k">Verbrauch Monat</span><span class="v" id="t_vmonat">–</span></div>
+    <div class="kv"><span class="k">Verbrauch gesamt</span><span class="v" id="t_vges">–</span></div>
+    <div class="kv"><span class="k">SPI</span><span class="v" id="t_spi">–</span></div>
+  </div>
+
+  <div class="tile" id="tileFilter">
+    <h3><span class="ico">🧰</span>Filter &amp; Alarme</h3>
+    <div class="row2">
+      <div class="hero"><span id="t_filter">–</span><small> Filter</small></div>
+    </div>
+    <div class="bar"><i id="filterbar"></i></div>
+    <div class="kv"><span class="k">Aktive Alarme</span><span class="v" id="t_alarme">–</span></div>
+    <button class="toggle" id="btnAlarmReset" onclick="resetAlarms()">Alarme quittieren</button>
+  </div>
+
+</section>
+</div><!-- /pageAnlage -->
+
+<div id="pageDetails" style="display:none">
+<section class="tiles tiles-lg">
+
+  <div class="tile" id="tileSoll">
+    <h3><span class="ico">🌡️</span>Temperatur-Sollwerte</h3>
+    <div class="row2"><span class="sub">Abwesend</span>
+      <div class="stepper" data-ident="SollAbwesend" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Normal</span>
+      <div class="stepper" data-ident="SollNormal" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Intensiv</span>
+      <div class="stepper" data-ident="SollIntensiv" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Boost</span>
+      <div class="stepper" data-ident="SollBoost" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="sep"></div>
+    <div class="row2"><span class="sub">Temperatur-Regelung</span>
+      <select id="selTempKontrolle" onchange="setVal('TempKontrolle',parseInt(this.value))">
+        <option value="0">Zuluft</option>
+        <option value="1">Abluft</option>
+        <option value="2">Balance</option>
+        <option value="3">Raum</option>
+      </select></div>
+  </div>
+
+  <div class="tile" id="tileFlowZu">
+    <h3><span class="ico">➡️</span>Luftmenge Zuluft</h3>
+    <div class="row2"><span class="sub">Abwesend</span>
+      <div class="stepper" data-ident="ZuluftAbwesendSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Normal</span>
+      <div class="stepper" data-ident="ZuluftNormalSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Intensiv</span>
+      <div class="stepper" data-ident="ZuluftIntensivSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Boost</span>
+      <div class="stepper" data-ident="ZuluftBoostSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+  </div>
+
+  <div class="tile" id="tileFlowAb">
+    <h3><span class="ico">⬅️</span>Luftmenge Abluft</h3>
+    <div class="row2"><span class="sub">Abwesend</span>
+      <div class="stepper" data-ident="AbluftAbwesendSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Normal</span>
+      <div class="stepper" data-ident="AbluftNormalSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Intensiv</span>
+      <div class="stepper" data-ident="AbluftIntensivSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Boost</span>
+      <div class="stepper" data-ident="AbluftBoostSoll" data-step="5" data-dec="0" data-flow="1">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+  </div>
+
+  <div class="tile" id="tileTimer">
+    <h3><span class="ico">⏱️</span>Timer-Modi</h3>
+    <div class="row2"><span class="sub">Küche</span>
+      <div class="stepper" data-ident="KuecheTimer" data-step="5" data-dec="0" data-unit=" min">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Feuerstätte</span>
+      <div class="stepper" data-ident="FeuerTimer" data-step="5" data-dec="0" data-unit=" min">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Override</span>
+      <div class="stepper" data-ident="OverrideTimer" data-step="5" data-dec="0" data-unit=" min">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="sub">Diese Modi startet das Gerät über Bedienteil, Zeitplan oder Schalteingänge – hier lässt sich nur die Laufzeit einstellen.</div>
+  </div>
+
+  <div class="tile" id="tileAQ">
+    <h3><span class="ico">🍃</span>Luftqualität</h3>
+    <div class="row2">
+      <button class="toggle" id="btnAQ" onclick="setVal('AQAktiv',!D.AQAktiv)">Regelung aktiv</button>
+    </div>
+    <div class="row2"><span class="sub">Temperatur-Soll</span>
+      <div class="stepper" data-ident="AQTempSoll" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">CO₂/VOC-Soll</span>
+      <div class="stepper" data-ident="AQSollwert" data-step="50" data-dec="0" data-unit=" ppm">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Feuchte-Soll</span>
+      <div class="stepper" data-ident="AQFeuchteSoll" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Intensität min</span>
+      <div class="stepper" data-ident="AQMinIntensitaet" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Intensität max</span>
+      <div class="stepper" data-ident="AQMaxIntensitaet" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+  </div>
+
+  <div class="tile" id="tileEnergieDetail">
+    <h3><span class="ico">📊</span>Energie-Details</h3>
+    <div class="kv"><span class="k">Rückgewinnung heute</span><span class="v" id="d_rtag">–</span></div>
+    <div class="kv"><span class="k">Rückgewinnung Monat</span><span class="v" id="d_rmonat">–</span></div>
+    <div class="kv"><span class="k">Rückgewinnung gesamt</span><span class="v" id="d_rges">–</span></div>
+    <div class="sep"></div>
+    <div class="kv"><span class="k">Heizleistung</span><span class="v" id="d_heizl">–</span></div>
+    <div class="kv"><span class="k">Heizer heute</span><span class="v" id="d_htag">–</span></div>
+    <div class="kv"><span class="k">Heizer gesamt</span><span class="v" id="d_hges">–</span></div>
+  </div>
+
+  <div class="tile" id="tileInfo">
+    <h3><span class="ico">ℹ️</span>Gerät</h3>
+    <div class="kv"><span class="k">Status</span><span class="v" id="d_status">–</span></div>
+    <div class="kv"><span class="k">Alarm-Codes</span><span class="v" id="d_alarmcodes">–</span></div>
+    <div class="kv" id="row_wasser"><span class="k">Wasserregister</span><span class="v" id="d_wasser">–</span></div>
+    <div class="kv"><span class="k">Raum (Panel)</span><span class="v" id="d_panel">–</span></div>
+    <div class="kv"><span class="k">Firmware</span><span class="v" id="d_fw">–</span></div>
+  </div>
+
+</section>
+</div><!-- /pageDetails -->
+
+<footer id="footinfo">POLO-AIR · Modbus TCP</footer>
+</div>
+
+<!-- PIN-Dialog -->
+<div class="overlay" id="overlay">
+  <div class="pinbox">
+    <div class="pintitle">PIN eingeben</div>
+    <div class="pindisplay" id="pindisplay">&nbsp;</div>
+    <div class="pinpad">
+      <button onclick="pinKey('1')">1</button><button onclick="pinKey('2')">2</button><button onclick="pinKey('3')">3</button>
+      <button onclick="pinKey('4')">4</button><button onclick="pinKey('5')">5</button><button onclick="pinKey('6')">6</button>
+      <button onclick="pinKey('7')">7</button><button onclick="pinKey('8')">8</button><button onclick="pinKey('9')">9</button>
+      <button class="del" onclick="pinKey('del')">⌫</button><button onclick="pinKey('0')">0</button><button class="ok" onclick="pinKey('ok')">✓</button>
+    </div>
+    <button class="toggle" onclick="pinKey('cancel')">Abbrechen</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let D = {};
+const pending = {};   // Ident => Zeitstempel laufender Schreibvorgänge
+let cachedPin = sessionStorage.getItem('pair_pin') || '';
+
+const MODE_NAMES = {0:'Standby',1:'Abwesend',2:'Normal',3:'Intensiv',4:'Boost',5:'Küche',
+                    6:'Feuerstätte',7:'Override',8:'Urlaub',9:'Luftqualität',10:'Aus'};
+
+function has(ident) { return D[ident] !== undefined; }
+function fmtN(v, dec, unit) {
+  return Number(v).toLocaleString('de-DE', {minimumFractionDigits: dec, maximumFractionDigits: dec}) + (unit || '');
+}
+function fmtT(ident) { return has(ident) ? fmtN(D[ident], 1, ' °C') : '–'; }
+function flowU() { return ' ' + (D.flowUnit || 'm³/h'); }
+
+let toastTimer = null;
+function toast(msg, cls) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.className = (cls || '') + ' show';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ---------- PIN-Dialog ----------
+let pinBuf = '', pinResolve = null;
+function askPin() {
+  return new Promise(res => {
+    pinResolve = res;
+    pinBuf = '';
+    $('pindisplay').textContent = ' ';
+    $('overlay').classList.add('show');
+  });
+}
+function pinKey(k) {
+  if (k === 'cancel') { $('overlay').classList.remove('show'); if (pinResolve) pinResolve(null); return; }
+  if (k === 'ok') { $('overlay').classList.remove('show'); if (pinResolve) pinResolve(pinBuf); return; }
+  if (k === 'del') { pinBuf = pinBuf.slice(0, -1); }
+  else if (pinBuf.length < 8) { pinBuf += k; }
+  $('pindisplay').textContent = pinBuf ? '•'.repeat(pinBuf.length) : ' ';
+}
+
+// ---------- Schreiben ----------
+async function sendPost(body) {
+  let pin = cachedPin;
+  if (D.pinRequired && !pin) {
+    pin = await askPin();
+    if (pin === null) return null;
+  }
+  body.pin = pin || '';
+  const r = await fetch('', {method: 'POST', body: JSON.stringify(body)});
+  let j = {};
+  try { j = await r.json(); } catch (e) { j = {ok: r.ok}; }
+  if (!r.ok || !j.ok) {
+    if (r.status === 403) {
+      cachedPin = '';
+      sessionStorage.removeItem('pair_pin');
+      toast('✕ Falsche PIN – nicht gespeichert');
+      return false;
+    }
+    throw new Error(j.error || 'Fehler');
+  }
+  if (D.pinRequired && pin) {
+    cachedPin = pin;
+    sessionStorage.setItem('pair_pin', pin);
+  }
+  return true;
+}
+
+async function setVal(ident, value) {
+  if (!D.writeEnabled) return;
+  pending[ident] = Date.now();
+  try {
+    const ok = await sendPost({ident, value});
+    if (ok === null) { delete pending[ident]; return; }
+    if (ok === false) { delete pending[ident]; load(); return; }
+    toast('✓ Gespeichert', 'ok');
+  } catch (e) {
+    delete pending[ident];
+    toast('Schreiben fehlgeschlagen – bitte nochmal versuchen (' + e.message + ')');
+  }
+  setTimeout(load, 1200);
+}
+
+async function resetAlarms() {
+  if (!D.writeEnabled) return;
+  try {
+    const ok = await sendPost({cmd: 'resetAlarms'});
+    if (ok) toast('✓ Alarme quittiert', 'ok');
+  } catch (e) {
+    toast('Quittieren fehlgeschlagen (' + e.message + ')');
+  }
+  setTimeout(load, 1200);
+}
+
+// ---------- Seiten-Umschaltung ----------
+function switchPage(p) {
+  $('pageAnlage').style.display = (p === 'details') ? 'none' : '';
+  $('pageDetails').style.display = (p === 'details') ? '' : 'none';
+  $('navAnlage').classList.toggle('active', p !== 'details');
+  $('navDetails').classList.toggle('active', p === 'details');
+  localStorage.setItem('pair_page', p);
+}
+switchPage(localStorage.getItem('pair_page') || 'anlage');
+
+// ---------- Stepper: lokal zählen, nach kurzer Pause senden ----------
+const stepTimers = {};
+function step(btn, dir) {
+  const box = btn.closest('.stepper');
+  const ident = box.dataset.ident;
+  const inc = parseFloat(box.dataset.step);
+  const dec = parseInt(box.dataset.dec);
+  const unit = box.dataset.flow ? flowU() : box.dataset.unit;
+  let cur = box.dataset.cur !== undefined ? parseFloat(box.dataset.cur) : (has(ident) ? Number(D[ident]) : NaN);
+  if (isNaN(cur)) return;
+  cur = Math.max(0, Math.round((cur + dir * inc) * 100) / 100);
+  box.dataset.cur = cur;
+  pending[ident] = Date.now();
+  box.querySelector('.val').textContent = fmtN(cur, dec, unit);
+  clearTimeout(stepTimers[ident]);
+  stepTimers[ident] = setTimeout(() => {
+    delete box.dataset.cur;
+    setVal(ident, cur);
+  }, 900);
+}
+
+function badge(label, on, cls) {
+  return `<span class="badge ${on ? 'on ' + (cls || '') : ''}"><span class="dot"></span>${label}</span>`;
+}
+
+// ---------- Rendern ----------
+function render() {
+  for (const k in pending) {
+    if (Date.now() - pending[k] > 5000) delete pending[k];
+  }
+
+  const fan = !!D.Ventilator && !!D.Power;
+  document.body.classList.toggle('fan-on', fan);
+  document.body.classList.toggle('rotor-on', !!D.Rotor && fan);
+  document.body.classList.toggle('bypass', !!D.FreiesKuehlen);
+  document.body.classList.toggle('heat-on', !!D.Heizen);
+  ['f_fresh', 'f_fort', 'f_sup', 'f_ext'].forEach(id => $(id).classList.toggle('on', fan));
+
+  // Header
+  let b = '';
+  b += badge('Lüftung', fan, 'b-sup');
+  b += badge('WRG', !!D.Rotor && fan);
+  b += badge('Heizen', !!D.Heizen, 'b-heat');
+  b += badge('Kühlen', !!D.Kuehlen, 'b-cool');
+  b += badge('Bypass', !!D.FreiesKuehlen, 'b-cool');
+  b += badge('ECO', !!D.EcoMode);
+  b += badge('AUTO', !!D.AutoMode);
+  if (D.Stoerung) b += badge('Störung', true, 'b-err');
+  else if (D.Warnung) b += badge('Warnung', true, 'b-err');
+  $('badges').innerHTML = b;
+
+  const bp = $('btnPower');
+  bp.textContent = D.Power ? 'EIN' : 'AUS';
+  bp.classList.toggle('on', !!D.Power);
+  bp.disabled = !D.writeEnabled;
+
+  const sel = $('selModus');
+  if (!pending.Modus && has('Modus')) {
+    const m = Number(D.Modus);
+    let opt = $('optCur');
+    if (m >= 1 && m <= 4) {
+      if (opt) opt.remove();
+      sel.value = String(m);
+    } else {
+      if (!opt) {
+        opt = document.createElement('option');
+        opt.id = 'optCur';
+        opt.disabled = true;
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      opt.value = String(m);
+      opt.textContent = MODE_NAMES[m] || ('Modus ' + m);
+      sel.value = String(m);
+    }
+  }
+  sel.disabled = !D.writeEnabled;
+
+  if (has('LastUpdate') && D.LastUpdate > 0) {
+    const alter_s = Math.floor(Date.now() / 1000) - D.LastUpdate;
+    const limit = Math.max((D.interval || 30) * 3 + 30, 120);
+    const veraltet = alter_s > limit;
+    const zeit = new Date(D.LastUpdate * 1000).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'});
+    $('stamp').textContent = veraltet ? ('⚠ Daten von ' + zeit + '!') : ('Stand ' + zeit);
+    $('stamp').classList.toggle('stale', veraltet);
+  }
+
+  // Schema
+  $('v_aussen').textContent = fmtT('AussenTemp');
+  $('v_zuluft').textContent = fmtT('ZuluftTemp');
+  $('v_abluft').textContent = fmtT('AbluftTemp');
+  $('v_zuflow').textContent = has('ZuluftStrom') ? ('  ' + fmtN(D.ZuluftStrom, 0, flowU())) : '';
+  $('v_abflow').textContent = has('AbluftStrom') ? ('  ' + fmtN(D.AbluftStrom, 0, flowU())) : '';
+  $('v_supfan').textContent = has('ZuluftVent') ? fmtN(D.ZuluftVent, 0, ' %') : '–';
+  $('v_extfan').textContent = has('AbluftVent') ? fmtN(D.AbluftVent, 0, ' %') : '–';
+  $('v_wt').textContent = has('Waermetauscher') ? fmtN(D.Waermetauscher, 0, ' %') : '–';
+
+  // Wohnraum: Panel-Werte bevorzugen, sonst Abluft als Näherung
+  if (has('PanelTemp')) {
+    $('v_raum').textContent = fmtN(D.PanelTemp, 1, ' °C');
+    $('v_feuchte').textContent = has('PanelFeuchte') ? ('Feuchte ' + fmtN(D.PanelFeuchte, 0, ' %')) : '';
+    $('v_aq').textContent = has('PanelAQ') ? ('Luftqualität ' + fmtN(D.PanelAQ, 0, ' ppm')) : '';
+  } else {
+    $('v_raum').textContent = fmtT('AbluftTemp');
+    $('v_feuchte').textContent = '(Abluft)';
+    $('v_aq').textContent = '';
+  }
+
+  // Filter-Ampel im Schema
+  const fp = has('FilterVerschmutzung') ? Number(D.FilterVerschmutzung) : -1;
+  const fcls = fp < 0 ? 'filt-ok' : (fp < 50 ? 'filt-ok' : (fp < 80 ? 'filt-warn' : 'filt-bad'));
+  $('filterdot').setAttribute('class', fcls);
+
+  // Kacheln Anlage
+  $('t_modus').textContent = has('Modus') ? (MODE_NAMES[D.Modus] || D.Modus) : '–';
+  $('t_status').textContent = D.StatusText || '–';
+  $('t_next').textContent = has('NaechsterModus') ? (MODE_NAMES[D.NaechsterModus] || D.NaechsterModus) : '–';
+  const be = $('btnEco'); be.classList.toggle('on', !!D.EcoMode); be.disabled = !D.writeEnabled;
+  const ba = $('btnAuto'); ba.classList.toggle('on', !!D.AutoMode); ba.disabled = !D.writeEnabled;
+
+  $('t_zuluft').textContent = has('ZuluftStrom') ? fmtN(D.ZuluftStrom, 0, flowU()) : '–';
+  $('t_abluft').textContent = has('AbluftStrom') ? fmtN(D.AbluftStrom, 0, flowU()) : '–';
+  $('t_supfan').textContent = has('ZuluftVent') ? fmtN(D.ZuluftVent, 0, ' %') : '–';
+  $('t_extfan').textContent = has('AbluftVent') ? fmtN(D.AbluftVent, 0, ' %') : '–';
+  $('row_klappen').style.display = has('Luftklappen') ? '' : 'none';
+  $('t_klappen').textContent = has('Luftklappen') ? fmtN(D.Luftklappen, 0, ' %') : '–';
+
+  $('t_eff').textContent = has('Effizienz') ? fmtN(D.Effizienz, 0, ' %') : '–';
+  $('t_rueck').textContent = has('Rueckgewinnung') ? fmtN(D.Rueckgewinnung, 0, ' W') : '–';
+  $('t_wt').textContent = has('Waermetauscher') ? fmtN(D.Waermetauscher, 0, ' %') : '–';
+  $('t_sparen').textContent = has('Energiesparen') ? fmtN(D.Energiesparen, 0, ' %') : '–';
+
+  $('t_leistung').innerHTML = has('Leistung') ? (fmtN(D.Leistung, 0, '') + '<small> W</small>') : '–';
+  $('t_vtag').textContent = has('VerbrauchTag') ? fmtN(D.VerbrauchTag, 2, ' kWh') : '–';
+  $('t_vmonat').textContent = has('VerbrauchMonat') ? fmtN(D.VerbrauchMonat, 1, ' kWh') : '–';
+  $('t_vges').textContent = has('VerbrauchGesamt') ? fmtN(D.VerbrauchGesamt, 0, ' kWh') : '–';
+  $('t_spi').textContent = has('SPI') ? fmtN(D.SPI, 2, '') : '–';
+
+  const ft = $('t_filter');
+  ft.textContent = fp < 0 ? '–' : fmtN(fp, 0, ' %');
+  ft.className = fp < 0 ? '' : (fp < 50 ? 'res-ok' : (fp < 80 ? 'res-warn' : 'res-bad'));
+  const fb = $('filterbar');
+  fb.style.width = (fp < 0 ? 0 : fp) + '%';
+  fb.style.background = fp < 50 ? 'var(--ok)' : (fp < 80 ? 'var(--warn)' : 'var(--err)');
+  $('t_alarme').textContent = has('AlarmAnzahl') ? (D.AlarmAnzahl + (D.AlarmText && D.AlarmText !== 'keine' ? ' (' + D.AlarmText + ')' : '')) : '–';
+  $('tileFilter').classList.toggle('err-tile', !!D.Stoerung);
+  $('btnAlarmReset').disabled = !D.writeEnabled;
+  $('btnAlarmReset').style.display = (Number(D.AlarmAnzahl) > 0 || D.Stoerung || D.Warnung) ? '' : 'none';
+
+  // Stepper-Werte (nur wenn keine Eingabe aussteht)
+  document.querySelectorAll('.stepper').forEach(box => {
+    const ident = box.dataset.ident;
+    if (!pending[ident] && has(ident)) {
+      const unit = box.dataset.flow ? flowU() : box.dataset.unit;
+      box.querySelector('.val').textContent = fmtN(D[ident], parseInt(box.dataset.dec), unit);
+    }
+    box.querySelectorAll('button').forEach(btn => btn.disabled = !D.writeEnabled);
+  });
+
+  if (!pending.TempKontrolle && has('TempKontrolle')) $('selTempKontrolle').value = String(D.TempKontrolle);
+  $('selTempKontrolle').disabled = !D.writeEnabled;
+
+  const bq = $('btnAQ');
+  bq.classList.toggle('on', !!D.AQAktiv);
+  bq.disabled = !D.writeEnabled;
+
+  // Details
+  $('d_rtag').textContent = has('RueckgewinnungTag') ? fmtN(D.RueckgewinnungTag, 2, ' kWh') : '–';
+  $('d_rmonat').textContent = has('RueckgewinnungMonat') ? fmtN(D.RueckgewinnungMonat, 1, ' kWh') : '–';
+  $('d_rges').textContent = has('RueckgewinnungGesamt') ? fmtN(D.RueckgewinnungGesamt, 0, ' kWh') : '–';
+  $('d_heizl').textContent = has('Heizleistung') ? fmtN(D.Heizleistung, 0, ' W') : '–';
+  $('d_htag').textContent = has('HeizerVerbrauchTag') ? fmtN(D.HeizerVerbrauchTag, 2, ' kWh') : '–';
+  $('d_hges').textContent = has('HeizerVerbrauchGesamt') ? fmtN(D.HeizerVerbrauchGesamt, 0, ' kWh') : '–';
+  $('d_status').textContent = D.StatusText || '–';
+  $('d_alarmcodes').textContent = D.AlarmText || '–';
+  $('row_wasser').style.display = has('WasserTemp') ? '' : 'none';
+  $('d_wasser').textContent = fmtT('WasserTemp');
+  $('d_panel').textContent = has('PanelTemp')
+    ? (fmtN(D.PanelTemp, 1, ' °C') + (has('PanelFeuchte') ? ' · ' + fmtN(D.PanelFeuchte, 0, ' %') : ''))
+    : 'kein Panel';
+  $('d_fw').textContent = D.Firmware || '–';
+
+  // Kacheln je nach Konfiguration ausblenden
+  $('tileEnergie').style.display = D.energy === false ? 'none' : '';
+  $('tileEnergieDetail').style.display = D.energy === false ? 'none' : '';
+  $('tileSoll').style.display = D.modeset === false ? 'none' : '';
+  $('tileFlowZu').style.display = D.modeset === false ? 'none' : '';
+  $('tileFlowAb').style.display = D.modeset === false ? 'none' : '';
+  $('tileTimer').style.display = D.modeset === false ? 'none' : '';
+  $('tileAQ').style.display = D.aq === false ? 'none' : '';
+
+  $('footinfo').textContent = 'Poloplast POLO-AIR · Modbus TCP'
+    + (D.Firmware ? ' · FW ' + D.Firmware : '') + (D.version ? ' · v' + D.version : '');
+}
+
+async function load() {
+  try {
+    const r = await fetch('?data=1', {cache: 'no-store'});
+    if (!r.ok) return;
+    D = await r.json();
+    render();
+  } catch (e) { /* nächster Zyklus */ }
+}
+
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>

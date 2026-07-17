@@ -1,0 +1,14 @@
+{
+    "id": "{C32D4669-6698-4C95-9AC1-D5E25A6B4EA3}",
+    "author": "Roman Martin",
+    "name": "PoloAir",
+    "title": "Poloplast POLO-AIR Wohnraumlüftung (Modbus TCP)",
+    "description": "Anbindung einer Poloplast POLO-AIR Komfortwohnraumlüftung (Komfovent C6 Steuerung, z. B. AIR 250) über Modbus TCP inkl. Betriebsmodi, Temperaturen, Luftmengen, Filter, Energiedaten, Alarmen und HTML-Dashboard mit Anlagenschema.",
+    "url": "",
+    "version": "1.0",
+    "build": 1,
+    "date": 0,
+    "compatibility": {
+        "minIPS": "6.0"
+    }
+}

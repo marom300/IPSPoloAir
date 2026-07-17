@@ -1,0 +1,127 @@
+{
+    "elements": [
+        {
+            "type": "ExpansionPanel",
+            "caption": "Verbindung",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "ValidationTextBox",
+                    "name": "Host",
+                    "caption": "IP-Adresse des Lüftungsgeräts (PING2 / C6-Regler)"
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "Port",
+                    "caption": "Modbus-Port",
+                    "minimum": 1,
+                    "maximum": 65535
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "UnitID",
+                    "caption": "Modbus Unit-ID",
+                    "minimum": 0,
+                    "maximum": 255
+                },
+                {
+                    "type": "NumberSpinner",
+                    "name": "Interval",
+                    "caption": "Abfrageintervall",
+                    "suffix": " Sekunden",
+                    "minimum": 5,
+                    "maximum": 3600
+                }
+            ]
+        },
+        {
+            "type": "ExpansionPanel",
+            "caption": "Funktionsumfang",
+            "expanded": true,
+            "items": [
+                {
+                    "type": "CheckBox",
+                    "name": "EnableWrite",
+                    "caption": "Schreibzugriff aktivieren (Ein/Aus, Modus und Sollwerte änderbar)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableModeSettings",
+                    "caption": "Sollwerte je Betriebsmodus (Temperatur, Luftmengen, Timer)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableAirQuality",
+                    "caption": "Luftqualitäts-Regelung (CO₂/VOC/Feuchte-Sollwerte)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableEnergy",
+                    "caption": "Energiedaten (Leistung, Rückgewinnung, Effizienz, Verbrauch)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableDashboard",
+                    "caption": "Dashboard-WebHook aktivieren (/hook/poloair)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "EnableArchive",
+                    "caption": "Alle Werte automatisch archivieren (Archive Control)"
+                },
+                {
+                    "type": "PasswordTextBox",
+                    "name": "PinCode",
+                    "caption": "PIN für Änderungen im Dashboard (leer = keine PIN-Abfrage)"
+                }
+            ]
+        }
+    ],
+    "actions": [
+        {
+            "type": "Button",
+            "caption": "Verbindung testen",
+            "onClick": "echo PAIR_TestConnection($id);"
+        },
+        {
+            "type": "Button",
+            "caption": "Jetzt aktualisieren",
+            "onClick": "PAIR_Update($id); echo 'Aktualisierung ausgeführt.';"
+        },
+        {
+            "type": "Button",
+            "caption": "Alarme quittieren",
+            "onClick": "echo PAIR_ResetAlarms($id) ? 'Alarme quittiert.' : 'Quittieren fehlgeschlagen.';"
+        },
+        {
+            "type": "Button",
+            "caption": "Register-Diagnose (Rohwerte anzeigen)",
+            "onClick": "echo PAIR_DumpRegisters($id);"
+        },
+        {
+            "type": "Label",
+            "caption": "Dashboard: http://<Symcon-IP>:3777/hook/poloair"
+        },
+        {
+            "type": "Label",
+            "caption": "Hinweis: Als Betriebsmodus sind per Modbus nur Abwesend, Normal, Intensiv und Boost schaltbar. Küche/Feuerstätte/Override/Urlaub startet das Gerät selbst (Bedienteil, Zeitplan oder Eingänge)."
+        }
+    ],
+    "status": [
+        {
+            "code": 102,
+            "icon": "active",
+            "caption": "Verbunden"
+        },
+        {
+            "code": 104,
+            "icon": "inactive",
+            "caption": "Keine IP-Adresse konfiguriert"
+        },
+        {
+            "code": 201,
+            "icon": "error",
+            "caption": "Verbindung zum Lüftungsgerät fehlgeschlagen"
+        }
+    ]
+}

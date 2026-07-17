@@ -1,0 +1,13 @@
+{
+    "id": "{20A1EAC1-468C-4179-94DF-5F0108DF9325}",
+    "name": "PoloAir",
+    "type": 3,
+    "vendor": "Poloplast",
+    "aliases": [
+        "Poloplast POLO-AIR Wohnraumlüftung (Modbus TCP)"
+    ],
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "PAIR"
+}
