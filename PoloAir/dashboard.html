@@ -590,8 +590,11 @@ function pinKey(k) {
 
 // ---------- Schreiben ----------
 async function sendPost(body) {
+  // Grundfunktionen (Ein/Aus, Stufe bzw. Modus) sind je nach Konfiguration
+  // von der PIN-Abfrage ausgenommen
+  const pinFree = !!body.ident && (D.pinFree || []).indexOf(body.ident) >= 0;
   let pin = cachedPin;
-  if (D.pinRequired && !pin) {
+  if (D.pinRequired && !pinFree && !pin) {
     pin = await askPin();
     if (pin === null) return null;
   }

@@ -83,6 +83,11 @@
                     "type": "PasswordTextBox",
                     "name": "PinCode",
                     "caption": "PIN für Änderungen im Dashboard (leer = keine PIN-Abfrage)"
+                },
+                {
+                    "type": "CheckBox",
+                    "name": "PinExemptBasic",
+                    "caption": "Grundfunktionen ohne PIN (Ein/Aus und Stufe bzw. Betriebsmodus) – Sollwerte und Einstellungen bleiben geschützt"
                 }
             ]
         }

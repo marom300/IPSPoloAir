@@ -128,6 +128,7 @@ class PoloAir extends IPSModule
         $this->RegisterPropertyBoolean('EnableDashboard', true);
         $this->RegisterPropertyBoolean('EnableArchive', true);
         $this->RegisterPropertyString('PinCode', '');
+        $this->RegisterPropertyBoolean('PinExemptBasic', true);
 
         // Adress-Offset: die Registernummern der Doku sind 1-basiert, auf dem Bus
         // meist 0-basiert (Registernummer-1). Wird automatisch erkannt. -99 = unbekannt.
@@ -193,6 +194,23 @@ class PoloAir extends IPSModule
     private function writeMap(): array
     {
         return ($this->ctrl() === self::CTRL_C4) ? self::WRITE_MAP_C4 : self::WRITE_MAP_C6;
+    }
+
+    /**
+     * Idents, die im Dashboard auch ohne PIN geschaltet werden dürfen.
+     * Gedacht für die täglichen Grundfunktionen (Ein/Aus, Stufe bzw. Modus),
+     * während Sollwerte und Einstellungen weiter PIN-geschützt bleiben.
+     *
+     * @return string[]
+     */
+    private function pinFreeIdents(): array
+    {
+        if (!$this->ReadPropertyBoolean('PinExemptBasic')) {
+            return [];
+        }
+        return ($this->ctrl() === self::CTRL_C4)
+            ? ['Power', 'Stufe']
+            : ['Power', 'Modus'];
     }
 
     // =====================================================================
@@ -665,7 +683,8 @@ class PoloAir extends IPSModule
                 return;
             }
             $pin = $this->ReadPropertyString('PinCode');
-            if ($pin !== '' && (string) ($payload['pin'] ?? '') !== $pin) {
+            $pinFree = ($cmd === '') && in_array($ident, $this->pinFreeIdents(), true);
+            if ($pin !== '' && !$pinFree && (string) ($payload['pin'] ?? '') !== $pin) {
                 http_response_code(403);
                 header('Content-Type: application/json');
                 echo json_encode(['ok' => false, 'error' => 'PIN']);
@@ -740,6 +759,7 @@ class PoloAir extends IPSModule
             'ctrl'         => [self::CTRL_AUTO => '?', self::CTRL_C6 => 'C6', self::CTRL_C4 => 'C4'][$this->ctrl()],
             'writeEnabled' => $this->ReadPropertyBoolean('EnableWrite'),
             'pinRequired'  => $this->ReadPropertyString('PinCode') !== '',
+            'pinFree'      => $this->pinFreeIdents(),
             'modeset'      => $this->ReadPropertyBoolean('EnableModeSettings'),
             'aq'           => $this->ReadPropertyBoolean('EnableAirQuality'),
             'energy'       => $this->ReadPropertyBoolean('EnableEnergy'),

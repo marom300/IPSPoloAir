@@ -94,6 +94,7 @@ Voraussetzung: Das Gerät ist per LAN erreichbar und Port 502 ist offen
 | Dashboard-WebHook | an | Registriert `/hook/poloair` und liefert dort das HTML-Dashboard aus. |
 | Alle Werte automatisch archivieren | an | Aktiviert das Logging aller Zahlen-/Bool-Variablen im Archive Control. |
 | PIN für Dashboard | leer | Wenn gesetzt, verlangt das Dashboard vor jeder Änderung diese PIN (eigener Ziffernblock, PIN wird pro Sitzung gemerkt). |
+| Grundfunktionen ohne PIN | an | Ein/Aus und Stufe (C4) bzw. Betriebsmodus (C6) sind auch bei gesetzter PIN direkt schaltbar. Sollwerte, Luftmengen, Timer und Alarm-Quittierung bleiben PIN-geschützt. Ohne Haken gilt die PIN für alles. |
 
 ## Dashboard
 
