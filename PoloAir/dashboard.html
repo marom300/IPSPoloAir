@@ -179,12 +179,7 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
   </div>
   <div class="badges" id="badges"></div>
   <button class="pwr" id="btnPower" onclick="setVal('Power', !D.Power)">–</button>
-  <select id="selModus" onchange="modeChanged(parseInt(this.value))">
-    <option value="1">Abwesend</option>
-    <option value="2">Normal</option>
-    <option value="3">Intensiv</option>
-    <option value="4">Boost</option>
-  </select>
+  <div class="nav" id="segModus"></div>
   <div class="stamp" id="stamp">–</div>
 </header>
 
@@ -430,12 +425,12 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
         <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
     <div class="sep"></div>
     <div class="row2"><span class="sub">Temperatur-Regelung</span>
-      <select id="selTempKontrolle" onchange="setVal('TempKontrolle',parseInt(this.value))">
-        <option value="0">Zuluft</option>
-        <option value="1">Abluft</option>
-        <option value="2">Balance</option>
-        <option value="3">Raum</option>
-      </select></div>
+      <div class="nav" id="segTempK">
+        <button onclick="setVal('TempKontrolle',0)">Zuluft</button>
+        <button onclick="setVal('TempKontrolle',1)">Abluft</button>
+        <button onclick="setVal('TempKontrolle',2)">Balance</button>
+        <button onclick="setVal('TempKontrolle',3)">Raum</button>
+      </div></div>
   </div>
 
   <div class="tile" id="tileFlowZu">
@@ -681,22 +676,24 @@ function badge(label, on, cls) {
   return `<span class="badge ${on ? 'on ' + (cls || '') : ''}"><span class="dot"></span>${label}</span>`;
 }
 
-// Modus-/Stufen-Auswahl im Header (C6: Modus 1-4, C4: Stufe 1-3)
+// Modus-/Stufen-Auswahl im Header als Buttons (native Dropdowns funktionieren
+// in den IPSView-/Symcon-WebViews nicht zuverlässig)
 function modeChanged(v) {
   setVal(D.ctrl === 'C4' ? 'Stufe' : 'Modus', v);
 }
 let selCtrl = '';
 function fillModeSelect(c4) {
-  const sel = $('selModus');
-  sel.innerHTML = '';
+  const seg = $('segModus');
+  seg.innerHTML = '';
   const opts = c4
     ? [[1, 'Stufe 1'], [2, 'Stufe 2'], [3, 'Stufe 3']]
     : [[1, 'Abwesend'], [2, 'Normal'], [3, 'Intensiv'], [4, 'Boost']];
   for (const [v, t] of opts) {
-    const o = document.createElement('option');
-    o.value = String(v);
-    o.textContent = t;
-    sel.appendChild(o);
+    const b = document.createElement('button');
+    b.dataset.v = String(v);
+    b.textContent = t;
+    b.onclick = () => modeChanged(v);
+    seg.appendChild(b);
   }
 }
 
@@ -740,28 +737,12 @@ function render() {
   bp.classList.toggle('on', !!D.Power);
   bp.disabled = !D.writeEnabled;
 
-  const sel = $('selModus');
   const modeIdent = c4 ? 'Stufe' : 'Modus';
-  const modeMax = c4 ? 3 : 4;
-  if (!pending[modeIdent] && has(modeIdent)) {
-    const m = Number(D[modeIdent]);
-    let opt = $('optCur');
-    if (m >= 1 && m <= modeMax) {
-      if (opt) opt.remove();
-      sel.value = String(m);
-    } else {
-      if (!opt) {
-        opt = document.createElement('option');
-        opt.id = 'optCur';
-        opt.disabled = true;
-        sel.insertBefore(opt, sel.firstChild);
-      }
-      opt.value = String(m);
-      opt.textContent = c4 ? ('Stufe ' + m) : (MODE_NAMES[m] || ('Modus ' + m));
-      sel.value = String(m);
-    }
-  }
-  sel.disabled = !D.writeEnabled;
+  const cur = has(modeIdent) ? Number(D[modeIdent]) : -1;
+  $('segModus').querySelectorAll('button').forEach(btn => {
+    btn.classList.toggle('active', Number(btn.dataset.v) === cur);
+    btn.disabled = !D.writeEnabled;
+  });
 
   if (has('LastUpdate') && D.LastUpdate > 0) {
     const alter_s = Math.floor(Date.now() / 1000) - D.LastUpdate;
@@ -872,8 +853,10 @@ function render() {
     box.querySelectorAll('button').forEach(btn => btn.disabled = !D.writeEnabled);
   });
 
-  if (!pending.TempKontrolle && has('TempKontrolle')) $('selTempKontrolle').value = String(D.TempKontrolle);
-  $('selTempKontrolle').disabled = !D.writeEnabled;
+  $('segTempK').querySelectorAll('button').forEach((btn, i) => {
+    btn.classList.toggle('active', has('TempKontrolle') && Number(D.TempKontrolle) === i);
+    btn.disabled = !D.writeEnabled;
+  });
 
   const bq = $('btnAQ');
   bq.classList.toggle('on', !!D.AQAktiv);
