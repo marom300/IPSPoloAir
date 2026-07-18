@@ -148,8 +148,11 @@ Aufruf: `http://<Symcon-IP>:3777/hook/poloair`
 - **Werte bleiben leer / unplausibel:** In der Instanz **„Register-Diagnose“**
   ausführen und die Rohwerte prüfen; dort sieht man auch den erkannten Adress-Offset.
 - **Schreiben ohne Wirkung:** Einige Register akzeptiert das Gerät nur in
-  bestimmten Zuständen (z. B. Modus nur 1–4). Meldungen stehen im Debug-Fenster
-  der Instanz.
+  bestimmten Zuständen (z. B. C6-Modus nur 1–4, C4-Stufe nur im Manuell-Modus –
+  das Modul schaltet dafür automatisch von AUTO auf Manuell um). Schlägt FC 06
+  fehl, versucht das Modul automatisch FC 16. Meldungen stehen im Debug-Fenster
+  der Instanz. Hilft das nicht, testweise die **Unit-ID auf 254** stellen
+  (Broadcast-Adresse der PING/NET-Module für Einzelgeräte).
 
 ## Lizenz
 

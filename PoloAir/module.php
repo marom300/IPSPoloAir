@@ -541,6 +541,17 @@ class PoloAir extends IPSModule
                 break;
         }
 
+        // C4: Im AUTO-Modus folgt das Gerät dem Wochenprogramm und ignoriert die
+        // manuelle Stufe -> vor dem Stellen auf Manuell umschalten (wie am Bedienteil)
+        if ($Ident === 'Stufe' && $this->ctrl() === self::CTRL_C4) {
+            $vid = @$this->GetIDForIdent('AutoMode');
+            if ($vid !== false && $vid > 0 && GetValue($vid)) {
+                if ($this->writeRegister(1102, 0)) {
+                    $this->SetValueSafe('AutoMode', false);
+                }
+            }
+        }
+
         switch ($coding) {
             case 't10':
                 $raw = (int) round(((float) $Value) * 10);
@@ -595,7 +606,14 @@ class PoloAir extends IPSModule
             }
             try {
                 $off = $this->detectDevice($sock);
-                return $this->mbWrite($sock, $register + $off, $raw);
+                $ok = $this->mbWrite($sock, $register + $off, $raw);
+                if (!$ok) {
+                    // Manche Firmwares akzeptieren Einzelschreiben (FC 06) nicht
+                    // -> mit FC 16 (Preset Multiple, 1 Register) erneut versuchen
+                    $this->SendDebug('Modbus', "FC6 auf Reg {$register} fehlgeschlagen, versuche FC16", 0);
+                    $ok = $this->mbWriteMultiple($sock, $register + $off, [$raw & 0xFFFF]);
+                }
+                return $ok;
             } finally {
                 fclose($sock);
             }
