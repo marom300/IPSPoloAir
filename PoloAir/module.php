@@ -5,29 +5,35 @@ declare(strict_types=1);
 /**
  * PoloAir – Poloplast POLO-AIR Komfortwohnraumlüftung über Modbus TCP
  *
- * Registerbasis: "Gebrauchsanweisung POLO-AIR + Geräte – Modbusverbindung" (08/2018).
- * Die POLO-AIR Geräte basieren auf der Komfovent C6 Steuerung; alle Register sind
- * Holding-Register (FC 03 lesen, FC 06/16 schreiben). Die Anbindung erfolgt über den
- * Netzwerkadapter (PING2) des Geräts, Standard 192.168.0.60, Port 502.
+ * Unterstützt beide Komfovent-Steuerungsgenerationen, die in POLO-AIR Geräten
+ * verbaut wurden (die Generation wird automatisch erkannt):
  *
- *  - Hauptkontrolle    Reg.   1–34  (An/Aus, Modi, Einheiten, Zeit)
- *  - Einstellungsmodi  Reg. 100–145 (Sollwerte je Betriebsmodus, Timer)
- *  - Eco/Luftqualität  Reg. 200–214
- *  - Alarme            Reg. 600–610 (aktive Alarme, Reset)
- *  - Überwachung       Reg. 900–951 (Temperaturen, Luftmengen, Energie, Panel)
- *  - Firmware          Reg. 1000–1001
+ *  - C6  (neuere Geräte, Ethernet onboard):
+ *    Registerbasis "Gebrauchsanweisung POLO-AIR + Geräte – Modbusverbindung" (08/2018).
+ *    Hauptkontrolle 1–34, Einstellungsmodi 100–145, Eco/Luftqualität 200–214,
+ *    Alarme 600–610, Überwachung 900–951, Firmware 1000–1001.
+ *
+ *  - C4  (ältere Geräte mit PING2-Netzwerkadapter):
+ *    Registerbasis "Modbus registers of C4 controller" (Komfovent/Vortvent 2016).
+ *    General 1000–1013, Ventilation 1100–1116, Temperatur 1200–1205.
+ *
+ * Alle Register sind Holding-Register (FC 03 lesen, FC 06/16 schreiben).
  */
 class PoloAir extends IPSModule
 {
     private const WEBHOOK = '/hook/poloair';
     private const GUID_WEBHOOK_CONTROL = '{015A6EB8-D6E5-4B93-B496-0D3F77AE9FE1}';
 
-    // Magischer Wert zum Quittieren aller aktiven Alarme (Register 600)
+    // Magischer Wert zum Quittieren aller aktiven Alarme (C6, Register 600)
     private const ALARM_RESET = 0x99C6;
 
-    // Schreibbare Register: Ident => [Register, Kodierung]
+    private const CTRL_AUTO = 0;
+    private const CTRL_C6 = 1;
+    private const CTRL_C4 = 2;
+
+    // Schreibbare Register C6: Ident => [Register, Kodierung]
     //  bool = 0/1 | raw = ganzzahlig | t10 = Temperatur ×10 | u32 = 2 Register (High zuerst)
-    private const WRITE_MAP = [
+    private const WRITE_MAP_C6 = [
         'Power'             => [1, 'bool'],
         'EcoMode'           => [3, 'bool'],
         'AutoMode'          => [4, 'bool'],
@@ -56,6 +62,44 @@ class PoloAir extends IPSModule
         'AQMaxIntensitaet'  => [210, 'raw']
     ];
 
+    // Schreibbare Register C4 (PING2): Ident => [Register, Kodierung]
+    private const WRITE_MAP_C4 = [
+        'Power'         => [1000, 'bool'],
+        'Saison'        => [1001, 'bool'],
+        'Stufe'         => [1100, 'raw'],
+        'AutoMode'      => [1102, 'bool'],
+        'ZuluftStufe1'  => [1103, 'raw'],
+        'ZuluftStufe2'  => [1104, 'raw'],
+        'ZuluftStufe3'  => [1105, 'raw'],
+        'ZuluftStufe4'  => [1106, 'raw'],
+        'AbluftStufe1'  => [1107, 'raw'],
+        'AbluftStufe2'  => [1108, 'raw'],
+        'AbluftStufe3'  => [1109, 'raw'],
+        'AbluftStufe4'  => [1110, 'raw'],
+        'OVREnable'     => [1111, 'bool'],
+        'OVRTime'       => [1112, 'raw'],
+        'SollTemp'      => [1201, 't10'],
+        'TempKorrektur' => [1202, 't10']
+    ];
+
+    // C4 Stop-Codes (Register 1009)
+    private const C4_STOP_CODES = [
+        3  => 'Rotor gestoppt',
+        4  => 'Heizer-Überhitzung',
+        9  => 'Zuluftfühler B1 defekt',
+        19 => 'Zulufttemperatur zu niedrig',
+        20 => 'Zulufttemperatur zu hoch',
+        27 => 'Wassertemperatur zu niedrig',
+        28 => 'Frostgefahr'
+    ];
+
+    // C4 Warn-Bits (Register 1007)
+    private const C4_WARN_BITS = [
+        11 => 'Rotor gestoppt',
+        13 => 'Heizer aus',
+        14 => 'Service fällig'
+    ];
+
     // Werte, die je nach Geräteausstattung fehlen (kein Wasserregister, kein
     // E-Heizer, kein Bedienpanel ...) -> im Dashboard erst zeigen, wenn sie
     // mindestens einmal geliefert wurden
@@ -76,6 +120,7 @@ class PoloAir extends IPSModule
         $this->RegisterPropertyInteger('Port', 502);
         $this->RegisterPropertyInteger('UnitID', 1);
         $this->RegisterPropertyInteger('Interval', 30);
+        $this->RegisterPropertyInteger('Controller', self::CTRL_AUTO);
         $this->RegisterPropertyBoolean('EnableWrite', true);
         $this->RegisterPropertyBoolean('EnableModeSettings', true);
         $this->RegisterPropertyBoolean('EnableAirQuality', true);
@@ -84,12 +129,14 @@ class PoloAir extends IPSModule
         $this->RegisterPropertyBoolean('EnableArchive', true);
         $this->RegisterPropertyString('PinCode', '');
 
-        // Adress-Offset: die C6 adressiert Register lt. Doku 1-basiert, auf dem Bus
+        // Adress-Offset: die Registernummern der Doku sind 1-basiert, auf dem Bus
         // meist 0-basiert (Registernummer-1). Wird automatisch erkannt. -99 = unbekannt.
         $this->RegisterAttributeInteger('AddrOffset', -99);
+        // Erkannte Steuerungsgeneration (0 = unbekannt, 1 = C6, 2 = C4)
+        $this->RegisterAttributeInteger('CtrlType', 0);
         // Idents, die schon mindestens einmal einen echten Wert geliefert haben
         $this->RegisterAttributeString('AvailIdents', '[]');
-        // Strömungseinheit lt. Register 28 (0 = m³/h, 1 = l/s)
+        // Strömungseinheit lt. C6-Register 28 (0 = m³/h, 1 = l/s)
         $this->RegisterAttributeInteger('FlowUnit', 0);
 
         $this->RegisterTimer('Update', 0, 'PAIR_Update($_IPS[\'TARGET\']);');
@@ -130,6 +177,24 @@ class PoloAir extends IPSModule
         }
     }
 
+    /**
+     * Wirksame Steuerungsgeneration: Vorgabe aus der Konfiguration oder
+     * automatisch erkannter Typ.
+     */
+    private function ctrl(): int
+    {
+        $prop = $this->ReadPropertyInteger('Controller');
+        if ($prop !== self::CTRL_AUTO) {
+            return $prop;
+        }
+        return $this->ReadAttributeInteger('CtrlType');
+    }
+
+    private function writeMap(): array
+    {
+        return ($this->ctrl() === self::CTRL_C4) ? self::WRITE_MAP_C4 : self::WRITE_MAP_C6;
+    }
+
     // =====================================================================
     // Öffentliche Funktionen
     // =====================================================================
@@ -164,30 +229,60 @@ class PoloAir extends IPSModule
         }
 
         $this->availNow = [];
+        $ok = false;
 
         try {
-            $off = $this->detectOffset($sock);
+            $ctrlBefore = $this->ReadAttributeInteger('CtrlType');
+            $off = $this->detectDevice($sock);
+            if ($this->ctrl() === self::CTRL_AUTO) {
+                // Erkennung fehlgeschlagen -> keine sinnvolle Abfrage möglich
+                $this->SetStatus(202);
+                return false;
+            }
+            // Nach erstmaliger Erkennung die passenden Variablen anlegen
+            if ($ctrlBefore !== $this->ReadAttributeInteger('CtrlType')) {
+                $this->MaintainVariables();
+                $this->SetupArchive();
+            }
 
-            // Überwachung ZUERST: die Live-Werte sind der wichtigste Block
-            $bMon = $this->readBlock($sock, 900 + $off, 27, 'Überwachung');
-            $bMain = $this->readBlock($sock, 1 + $off, 34, 'Hauptkontrolle');
-            $bAlarm = $this->readBlock($sock, 600 + $off, 11, 'Alarme');
-            $bModes = $this->ReadPropertyBoolean('EnableModeSettings')
-                ? $this->readBlock($sock, 100 + $off, 46, 'Einstellungsmodi') : null;
-            $bAQ = $this->ReadPropertyBoolean('EnableAirQuality')
-                ? $this->readBlock($sock, 200 + $off, 15, 'Eco/Luftqualität') : null;
-            $bCons = $this->ReadPropertyBoolean('EnableEnergy')
-                ? $this->readBlock($sock, 927 + $off, 19, 'Verbrauch') : null;
-            $bPanel = $this->readBlock($sock, 946 + $off, 6, 'Panel');
-            $bFw = $this->readBlock($sock, 1000 + $off, 2, 'Firmware');
+            if ($this->ctrl() === self::CTRL_C4) {
+                $ok = $this->updateC4($sock, $off);
+            } else {
+                $ok = $this->updateC6($sock, $off);
+            }
         } finally {
             if ($sock !== false) {
                 @fclose($sock);
             }
         }
 
-        if ($bMon === null && $bMain === null) {
+        if (!$ok) {
             $this->SetStatus(201);
+            return false;
+        }
+
+        $this->SetValueSafe('LastUpdate', time());
+        $this->persistAvail();
+        $this->SetStatus(102);
+        return true;
+    }
+
+    private function updateC6(&$sock, int $off): bool
+    {
+        // Überwachung ZUERST: die Live-Werte sind der wichtigste Block
+        $bMon = $this->readBlock($sock, 900 + $off, 27, 'Überwachung');
+        $bMain = $this->readBlock($sock, 1 + $off, 34, 'Hauptkontrolle');
+        $bAlarm = $this->readBlock($sock, 600 + $off, 11, 'Alarme');
+        $bModes = $this->ReadPropertyBoolean('EnableModeSettings')
+            ? $this->readBlock($sock, 100 + $off, 46, 'Einstellungsmodi') : null;
+        $bAQ = $this->ReadPropertyBoolean('EnableAirQuality')
+            ? $this->readBlock($sock, 200 + $off, 15, 'Eco/Luftqualität') : null;
+        $bCons = $this->ReadPropertyBoolean('EnableEnergy')
+            ? $this->readBlock($sock, 927 + $off, 19, 'Verbrauch') : null;
+        $bPanel = $this->readBlock($sock, 946 + $off, 6, 'Panel');
+        $bFw = $this->readBlock($sock, 1000 + $off, 2, 'Firmware');
+
+        if ($bMon === null && $bMain === null) {
             return false;
         }
 
@@ -199,10 +294,20 @@ class PoloAir extends IPSModule
         $this->parseConsumption($bCons);
         $this->parsePanel($bPanel);
         $this->parseFirmware($bFw);
+        return true;
+    }
 
-        $this->SetValueSafe('LastUpdate', time());
-        $this->persistAvail();
-        $this->SetStatus(102);
+    private function updateC4(&$sock, int $off): bool
+    {
+        $bGen = $this->readBlock($sock, 1000 + $off, 14, 'General');
+        $bVent = $this->readBlock($sock, 1100 + $off, 17, 'Ventilation');
+        $bTemp = $this->readBlock($sock, 1200 + $off, 6, 'Temperatur');
+
+        if ($bGen === null && $bVent === null) {
+            return false;
+        }
+
+        $this->parseC4($bGen, $bVent, $bTemp);
         return true;
     }
 
@@ -219,10 +324,14 @@ class PoloAir extends IPSModule
     }
 
     /**
-     * Quittiert alle aktiven Alarme (Störungen und Warnungen).
+     * Quittiert alle aktiven Alarme (nur C6 – die C4 bietet dafür kein Register).
      */
     public function ResetAlarms(): bool
     {
+        if ($this->ctrl() === self::CTRL_C4) {
+            $this->LogMessage('Alarm-Quittierung per Modbus wird von der C4-Steuerung nicht unterstützt.', KL_WARNING);
+            return false;
+        }
         $ok = $this->writeRegister(600, self::ALARM_RESET);
         if ($ok) {
             $this->Update();
@@ -244,8 +353,9 @@ class PoloAir extends IPSModule
             return 'Modbus-Zugriff belegt, bitte erneut versuchen.';
         }
         try {
-            // Gemerkten Adress-Offset verwerfen -> Erkennung läuft sichtbar neu
+            // Gemerkte Erkennung verwerfen -> läuft sichtbar neu
             $this->WriteAttributeInteger('AddrOffset', -99);
+            $this->WriteAttributeInteger('CtrlType', 0);
 
             $errno = 0;
             $errstr = '';
@@ -259,72 +369,90 @@ class PoloAir extends IPSModule
             $out .= '   Unit-ID: ' . $this->ReadPropertyInteger('UnitID') . "\n\n";
 
             try {
-                // 2) Einzelregister-Test mit beiden Adress-Offsets
-                $out .= "2) Einzelregister-Test (Register 30 = Jahr, erwartet 2016–2099):\n";
-                $found = null;
-                foreach ([-1, 0] as $off) {
-                    $err = '';
-                    $r = $this->mbRead($sock, 30 + $off, 1, $err);
-                    if ($r === null) {
-                        $out .= "   Offset {$off}: {$err}\n";
-                    } else {
-                        $ok = ($r[0] >= 2016 && $r[0] <= 2099);
-                        $out .= "   Offset {$off}: Wert {$r[0]}" . ($ok ? ' -> PASST' : ' (unplausibel)') . "\n";
-                        if ($ok && $found === null) {
-                            $found = $off;
+                // 2) Steuerung + Adress-Offset erkennen (Jahres-Register beider Generationen)
+                $out .= "2) Steuerungs-Erkennung (Jahres-Register, erwartet 2016–2099):\n";
+                $candidates = [
+                    [self::CTRL_C6, 30, 'C6 (Reg 30)'],
+                    [self::CTRL_C4, 1005, 'C4/PING2 (Reg 1005)']
+                ];
+                foreach ($candidates as [$type, $reg, $name]) {
+                    foreach ([-1, 0] as $off) {
+                        $err = '';
+                        $r = $this->mbRead($sock, $reg + $off, 1, $err);
+                        if ($r === null) {
+                            $out .= "   {$name}, Offset {$off}: {$err}\n";
+                        } else {
+                            $ok = ($r[0] >= 2016 && $r[0] <= 2099);
+                            $out .= "   {$name}, Offset {$off}: Wert {$r[0]}" . ($ok ? ' -> PASST' : ' (unplausibel)') . "\n";
                         }
                     }
                 }
-                if ($found === null) {
-                    $out .= "   -> Kein Offset lieferte ein plausibles Jahr.\n" .
-                        "      Mögliche Ursachen: anderes Gerät auf dieser IP, falsche Unit-ID,\n" .
-                        "      oder ein anderer Modbus-Client blockiert die Steuerung\n" .
-                        "      (Weboberfläche/andere Clients testweise schließen, Gerät kurz stromlos machen).\n";
-                    // Trotzdem weiter testen mit -1
-                    $found = -1;
-                } else {
-                    $this->WriteAttributeInteger('AddrOffset', $found);
+                $off = $this->detectDevice($sock);
+                $ctrl = $this->ctrl();
+                $ctrlName = [self::CTRL_AUTO => 'NICHT ERKANNT', self::CTRL_C6 => 'C6', self::CTRL_C4 => 'C4 (PING2)'][$ctrl];
+                $out .= "   -> Erkannt: {$ctrlName}, Adress-Offset {$off}\n\n";
+
+                if ($ctrl === self::CTRL_AUTO) {
+                    $out .= "Keine bekannte Steuerung erkannt. Mögliche Ursachen:\n" .
+                        " - anderes Gerät auf dieser IP\n" .
+                        " - falsche Unit-ID\n" .
+                        " - anderer Modbus-Client blockiert die Steuerung\n";
+                    return $out;
                 }
-                $off = $found;
-                $out .= "   Verwendeter Adress-Offset: {$off}\n\n";
 
                 // 3) Wichtige Einzelwerte
                 $out .= "3) Einzelwerte:\n";
-                $tests = [
-                    [1, 'Ein/Aus (Reg 1)'],
-                    [5, 'Modus (Reg 5)'],
-                    [902, 'Zuluft-Temp (Reg 902)'],
-                    [904, 'Außen-Temp (Reg 904)'],
-                    [1000, 'Firmware (Reg 1000)']
-                ];
-                foreach ($tests as [$reg, $name]) {
+                if ($ctrl === self::CTRL_C4) {
+                    $tests = [
+                        [1000, 'Ein/Aus (Reg 1000)', 'raw'],
+                        [1101, 'Stufe aktuell (Reg 1101)', 'raw'],
+                        [1200, 'Zuluft-Temp (Reg 1200)', 't10'],
+                        [1201, 'Sollwert (Reg 1201)', 't10'],
+                        [1115, 'Zuluft-Ventilator % (Reg 1115)', 'raw']
+                    ];
+                } else {
+                    $tests = [
+                        [1, 'Ein/Aus (Reg 1)', 'raw'],
+                        [5, 'Modus (Reg 5)', 'mode'],
+                        [902, 'Zuluft-Temp (Reg 902)', 't10'],
+                        [904, 'Außen-Temp (Reg 904)', 't10'],
+                        [917, 'Filter % (Reg 917)', 'raw']
+                    ];
+                }
+                foreach ($tests as [$reg, $name, $conv]) {
                     $err = '';
                     $r = $this->mbRead($sock, $reg + $off, 1, $err);
                     if ($r === null) {
                         $out .= "   {$name}: {$err}\n";
                     } else {
                         $extra = '';
-                        if ($reg === 5) {
-                            $extra = ' = ' . $this->modeName($r[0]);
-                        } elseif ($reg === 902 || $reg === 904) {
+                        if ($conv === 't10') {
                             $extra = sprintf(' = %.1f °C', $this->s16($r[0]) / 10);
+                        } elseif ($conv === 'mode') {
+                            $extra = ' = ' . $this->modeName($r[0]);
                         }
                         $out .= "   {$name}: {$r[0]}{$extra}\n";
                     }
                 }
                 $out .= "\n";
 
-                // 4) Blockgrößen-Test (manche Firmwares lehnen große Blöcke ab)
+                // 4) Blockgrößen-Test
                 $out .= "4) Block-Lesetest:\n";
-                $blocks = [
-                    [1, 12, 'Hauptkontrolle klein (Reg 1, 12 Register)'],
-                    [1, 34, 'Hauptkontrolle groß (Reg 1, 34 Register)'],
-                    [900, 13, 'Überwachung klein (Reg 900, 13 Register)'],
-                    [900, 27, 'Überwachung groß (Reg 900, 27 Register)'],
-                    [600, 11, 'Alarme (Reg 600, 11 Register)'],
-                    [100, 46, 'Einstellungsmodi (Reg 100, 46 Register)'],
-                    [927, 19, 'Verbrauch (Reg 927, 19 Register)']
-                ];
+                if ($ctrl === self::CTRL_C4) {
+                    $blocks = [
+                        [1000, 14, 'General (Reg 1000, 14 Register)'],
+                        [1100, 17, 'Ventilation (Reg 1100, 17 Register)'],
+                        [1200, 6, 'Temperatur (Reg 1200, 6 Register)']
+                    ];
+                } else {
+                    $blocks = [
+                        [1, 34, 'Hauptkontrolle (Reg 1, 34 Register)'],
+                        [900, 27, 'Überwachung (Reg 900, 27 Register)'],
+                        [600, 11, 'Alarme (Reg 600, 11 Register)'],
+                        [100, 46, 'Einstellungsmodi (Reg 100, 46 Register)'],
+                        [927, 19, 'Verbrauch (Reg 927, 19 Register)']
+                    ];
+                }
                 foreach ($blocks as [$start, $qty, $name]) {
                     $err = '';
                     $r = $this->mbRead($sock, $start + $off, $qty, $err);
@@ -346,7 +474,8 @@ class PoloAir extends IPSModule
 
     public function RequestAction($Ident, $Value)
     {
-        if (!isset(self::WRITE_MAP[$Ident])) {
+        $map = $this->writeMap();
+        if (!isset($map[$Ident])) {
             throw new Exception('Unbekannter Ident: ' . $Ident);
         }
         if (!$this->ReadPropertyBoolean('EnableWrite')) {
@@ -354,14 +483,20 @@ class PoloAir extends IPSModule
             return;
         }
 
-        [$register, $coding] = self::WRITE_MAP[$Ident];
+        [$register, $coding] = $map[$Ident];
 
-        // Plausibilitätsgrenzen lt. Registerliste
+        // Plausibilitätsgrenzen lt. Registerlisten
         switch ($Ident) {
             case 'Modus':
-                // Schreibbar sind nur Abwesend/Normal/Intensiv/Boost
+                // C6: schreibbar sind nur Abwesend/Normal/Intensiv/Boost
                 if (!in_array((int) $Value, [1, 2, 3, 4], true)) {
                     throw new Exception('Als Modus sind nur Abwesend (1), Normal (2), Intensiv (3) und Boost (4) schaltbar.');
+                }
+                break;
+            case 'Stufe':
+                // C4: manuell schaltbar sind die Stufen 1–3
+                if (!in_array((int) $Value, [1, 2, 3], true)) {
+                    throw new Exception('Als Stufe sind nur 1, 2 und 3 schaltbar.');
                 }
                 break;
             case 'TempKontrolle':
@@ -372,6 +507,9 @@ class PoloAir extends IPSModule
             case 'OverrideTimer':
                 $this->assertRange((int) $Value, 0, 300, $Ident);
                 break;
+            case 'OVRTime':
+                $this->assertRange((int) $Value, 1, 90, $Ident);
+                break;
             case 'SollAbwesend':
             case 'SollNormal':
             case 'SollIntensiv':
@@ -379,9 +517,21 @@ class PoloAir extends IPSModule
             case 'AQTempSoll':
                 $this->assertRange((float) $Value, 5, 40, $Ident);
                 break;
-            case 'AQFeuchteSoll':
-                $this->assertRange((int) $Value, 0, 100, $Ident);
+            case 'SollTemp':
+                $this->assertRange((float) $Value, 0, 30, $Ident);
                 break;
+            case 'TempKorrektur':
+                $this->assertRange((float) $Value, -9, 9, $Ident);
+                break;
+            case 'ZuluftStufe1':
+            case 'ZuluftStufe2':
+            case 'ZuluftStufe3':
+            case 'ZuluftStufe4':
+            case 'AbluftStufe1':
+            case 'AbluftStufe2':
+            case 'AbluftStufe3':
+            case 'AbluftStufe4':
+            case 'AQFeuchteSoll':
             case 'AQMinIntensitaet':
             case 'AQMaxIntensitaet':
                 $this->assertRange((int) $Value, 0, 100, $Ident);
@@ -405,7 +555,7 @@ class PoloAir extends IPSModule
         if ($coding === 'u32') {
             $ok = $this->writeRegister32($register, max(0, (int) $Value));
         } else {
-            $ok = $this->writeRegister($register, $raw);
+            $ok = $this->writeRegister($register, $raw & 0xFFFF);
         }
         if (!$ok) {
             throw new Exception('Schreiben auf Register ' . $register . ' fehlgeschlagen.');
@@ -444,7 +594,7 @@ class PoloAir extends IPSModule
                 throw new Exception('Keine Verbindung zum Lüftungsgerät.');
             }
             try {
-                $off = $this->detectOffset($sock);
+                $off = $this->detectDevice($sock);
                 return $this->mbWrite($sock, $register + $off, $raw);
             } finally {
                 fclose($sock);
@@ -466,7 +616,7 @@ class PoloAir extends IPSModule
                 throw new Exception('Keine Verbindung zum Lüftungsgerät.');
             }
             try {
-                $off = $this->detectOffset($sock);
+                $off = $this->detectDevice($sock);
                 return $this->mbWriteMultiple($sock, $register + $off, [($value >> 16) & 0xFFFF, $value & 0xFFFF]);
             } finally {
                 fclose($sock);
@@ -491,7 +641,7 @@ class PoloAir extends IPSModule
             $payload = json_decode(file_get_contents('php://input'), true);
             $ident = (string) ($payload['ident'] ?? '');
             $cmd = (string) ($payload['cmd'] ?? '');
-            if ($cmd !== 'resetAlarms' && !isset(self::WRITE_MAP[$ident])) {
+            if ($cmd !== 'resetAlarms' && !isset($this->writeMap()[$ident])) {
                 http_response_code(400);
                 echo json_encode(['ok' => false, 'error' => 'invalid ident']);
                 return;
@@ -534,12 +684,15 @@ class PoloAir extends IPSModule
     private function collectData(): array
     {
         $idents = [
-            'Power', 'Modus', 'EcoMode', 'AutoMode', 'StatusText', 'NaechsterModus', 'TempKontrolle',
-            'Ventilator', 'Rotor', 'Heizen', 'Kuehlen', 'FreiesHeizen', 'FreiesKuehlen',
-            'Stoerung', 'Warnung', 'AlarmAnzahl', 'AlarmText',
-            'AussenTemp', 'ZuluftTemp', 'AbluftTemp', 'WasserTemp',
-            'ZuluftStrom', 'AbluftStrom', 'ZuluftVent', 'AbluftVent',
-            'Waermetauscher', 'ElHeizer', 'FilterVerschmutzung', 'Luftklappen',
+            // gemeinsam
+            'Power', 'AutoMode', 'StatusText', 'Ventilator', 'Rotor', 'Heizen', 'Kuehlen',
+            'Stoerung', 'Warnung', 'AlarmText',
+            'ZuluftTemp', 'WasserTemp', 'ZuluftVent', 'AbluftVent', 'Waermetauscher', 'ElHeizer',
+            'Firmware', 'LastUpdate',
+            // C6
+            'Modus', 'EcoMode', 'NaechsterModus', 'TempKontrolle', 'FreiesHeizen', 'FreiesKuehlen',
+            'AlarmAnzahl', 'AussenTemp', 'AbluftTemp', 'ZuluftStrom', 'AbluftStrom',
+            'FilterVerschmutzung', 'Luftklappen',
             'SollAbwesend', 'SollNormal', 'SollIntensiv', 'SollBoost',
             'ZuluftAbwesendSoll', 'AbluftAbwesendSoll', 'ZuluftNormalSoll', 'AbluftNormalSoll',
             'ZuluftIntensivSoll', 'AbluftIntensivSoll', 'ZuluftBoostSoll', 'AbluftBoostSoll',
@@ -550,7 +703,11 @@ class PoloAir extends IPSModule
             'HeizerVerbrauchTag', 'HeizerVerbrauchMonat', 'HeizerVerbrauchGesamt',
             'RueckgewinnungTag', 'RueckgewinnungMonat', 'RueckgewinnungGesamt',
             'PanelTemp', 'PanelFeuchte', 'PanelAQ',
-            'Firmware', 'LastUpdate'
+            // C4
+            'Saison', 'Stufe', 'SollTemp', 'TempKorrektur', 'WasserHeizung', 'WasserKuehlung',
+            'ZuluftStufe1', 'ZuluftStufe2', 'ZuluftStufe3', 'ZuluftStufe4',
+            'AbluftStufe1', 'AbluftStufe2', 'AbluftStufe3', 'AbluftStufe4',
+            'OVREnable', 'OVRTime', 'OVRRest'
         ];
 
         $avail = json_decode($this->ReadAttributeString('AvailIdents'), true);
@@ -562,6 +719,7 @@ class PoloAir extends IPSModule
 
         $lib = @IPS_GetLibrary('{C32D4669-6698-4C95-9AC1-D5E25A6B4EA3}');
         $out = [
+            'ctrl'         => [self::CTRL_AUTO => '?', self::CTRL_C6 => 'C6', self::CTRL_C4 => 'C4'][$this->ctrl()],
             'writeEnabled' => $this->ReadPropertyBoolean('EnableWrite'),
             'pinRequired'  => $this->ReadPropertyString('PinCode') !== '',
             'modeset'      => $this->ReadPropertyBoolean('EnableModeSettings'),
@@ -585,7 +743,7 @@ class PoloAir extends IPSModule
     }
 
     // =====================================================================
-    // Register-Parsing
+    // Register-Parsing C6
     // =====================================================================
 
     private function parseMain(?array $b): void
@@ -681,7 +839,7 @@ class PoloAir extends IPSModule
         if (!$power || $mode === 10) {
             $parts[] = 'Aus';
         } else {
-            $parts[] = $this->modeName($mode);
+            $parts[] = ($mode >= 0) ? $this->modeName($mode) : 'Betrieb';
             if ($mask & (1 << 4)) {
                 $parts[] = 'Heizen';
             }
@@ -831,6 +989,139 @@ class PoloAir extends IPSModule
         $this->SetValueSafe('Firmware', $this->fwString(($b[0] << 16) | $b[1]));
     }
 
+    // =====================================================================
+    // Register-Parsing C4 (PING2)
+    // =====================================================================
+
+    private function parseC4(?array $bGen, ?array $bVent, ?array $bTemp): void
+    {
+        $power = true;
+        $stufe = -1;
+        $heizt = false;
+        $kuehlt = false;
+        $stoerText = [];
+        $warnText = [];
+
+        if ($bGen !== null) {
+            $g = fn (int $reg) => $bGen[$reg - 1000] ?? null;
+
+            $power = ($g(1000) === 1);
+            $this->SetValueSafe('Power', $power);
+            $this->SetValueSafe('Saison', $g(1001) === 1);
+
+            $warn = (int) ($g(1007) ?? 0);
+            $flags = (int) ($g(1008) ?? 0);
+            $code = (int) ($g(1009) ?? 0);
+            $this->SetValueSafe('Warnung', $warn > 0);
+            $this->SetValueSafe('Stoerung', $flags > 0 || $code > 0);
+
+            foreach (self::C4_WARN_BITS as $bit => $text) {
+                if ($warn & (1 << $bit)) {
+                    $warnText[] = $text;
+                }
+            }
+            if ($warn > 0 && count($warnText) === 0) {
+                $warnText[] = 'Warnung (' . $warn . ')';
+            }
+            if ($code > 0) {
+                $stoerText[] = self::C4_STOP_CODES[$code] ?? ('Stopp-Code ' . $code);
+            }
+
+            $wt = (int) ($g(1010) ?? 0);
+            $el = (int) ($g(1011) ?? 0);
+            $wh = (int) ($g(1012) ?? 0);
+            $wk = (int) ($g(1013) ?? 0);
+            $this->SetValueSafe('Waermetauscher', (float) $wt);
+            $this->SetValueSafe('ElHeizer', (float) $el);
+            $this->SetValueSafe('WasserHeizung', (float) $wh);
+            $this->SetValueSafe('WasserKuehlung', (float) $wk);
+            $this->SetValueSafe('Rotor', $wt > 0);
+            $heizt = ($el > 0 || $wh > 0);
+            $kuehlt = ($wk > 0);
+            $this->SetValueSafe('Heizen', $heizt);
+            $this->SetValueSafe('Kuehlen', $kuehlt);
+        }
+
+        if ($bVent !== null) {
+            $g = fn (int $reg) => $bVent[$reg - 1100] ?? null;
+
+            if ($g(1101) !== null) {
+                $stufe = (int) $g(1101);
+                $this->SetValueSafe('Stufe', $stufe);
+            }
+            $this->SetValueSafe('AutoMode', $g(1102) === 1);
+            if ($this->ReadPropertyBoolean('EnableModeSettings')) {
+                for ($i = 1; $i <= 4; $i++) {
+                    if ($g(1102 + $i) !== null) {
+                        $this->SetValueSafe('ZuluftStufe' . $i, (int) $g(1102 + $i));
+                    }
+                    if ($g(1106 + $i) !== null) {
+                        $this->SetValueSafe('AbluftStufe' . $i, (int) $g(1106 + $i));
+                    }
+                }
+            }
+            $this->SetValueSafe('OVREnable', $g(1111) === 1);
+            if ($g(1112) !== null) {
+                $this->SetValueSafe('OVRTime', (int) $g(1112));
+            }
+            if ($g(1113) !== null) {
+                $this->SetValueSafe('OVRRest', (int) $g(1113));
+            }
+            $this->SetValueSafe('Ventilator', $g(1114) === 1);
+            if ($g(1115) !== null) {
+                $this->SetValueSafe('ZuluftVent', (float) $g(1115));
+            }
+            if ($g(1116) !== null) {
+                $this->SetValueSafe('AbluftVent', (float) $g(1116));
+            }
+        }
+
+        if ($bTemp !== null) {
+            $g = fn (int $reg) => $bTemp[$reg - 1200] ?? null;
+
+            if ($g(1200) !== null) {
+                $this->SetValueSafe('ZuluftTemp', $this->s16((int) $g(1200)) / 10);
+            }
+            if ($g(1201) !== null) {
+                $this->SetValueSafe('SollTemp', $this->s16((int) $g(1201)) / 10);
+            }
+            if ($g(1202) !== null) {
+                $this->SetValueSafe('TempKorrektur', $this->s16((int) $g(1202)) / 10);
+            }
+            // Wassertemperatur nur bei Geräten mit Wasserregister sinnvoll
+            if ($g(1205) !== null && (int) $g(1205) !== 0) {
+                $this->SetValueSafe('WasserTemp', $this->s16((int) $g(1205)) / 10);
+            }
+        }
+
+        // Klartext-Status
+        $parts = [];
+        if (!$power) {
+            $parts[] = 'Aus';
+        } else {
+            $parts[] = ($stufe >= 0) ? ('Stufe ' . $stufe) : 'Betrieb';
+            if ($heizt) {
+                $parts[] = 'Heizen';
+            }
+            if ($kuehlt) {
+                $parts[] = 'Kühlen';
+            }
+        }
+        if (count($stoerText) > 0) {
+            $parts[] = 'STÖRUNG: ' . implode(', ', $stoerText);
+        } elseif (count($warnText) > 0) {
+            $parts[] = implode(', ', $warnText);
+        }
+        $this->SetValueSafe('StatusText', implode(' · ', $parts));
+
+        $alarm = array_merge($stoerText, $warnText);
+        $this->SetValueSafe('AlarmText', count($alarm) === 0 ? 'keine' : implode(', ', $alarm));
+    }
+
+    // =====================================================================
+    // Hilfsfunktionen
+    // =====================================================================
+
     private function fwString(int $v): string
     {
         return sprintf('%d.%d.%d.%d', ($v >> 24) & 0xFF, ($v >> 20) & 0x0F, ($v >> 12) & 0xFF, $v & 0x0FFF);
@@ -926,11 +1217,17 @@ class PoloAir extends IPSModule
                     return null;
                 }
             }
-            $r = $this->mbRead($sock, $addr, $qty);
+            $err = '';
+            $r = $this->mbRead($sock, $addr, $qty, $err);
             if ($r !== null) {
                 return $r;
             }
-            $this->SendDebug('Modbus', "Block {$name}: Versuch {$try} fehlgeschlagen, Verbindung wird erneuert", 0);
+            // Bei einer Modbus-Exception antwortet das Gerät ja -> Wiederholen bringt nichts
+            if (strpos($err, 'Exception') !== false) {
+                $this->SendDebug('Modbus', "Block {$name}: {$err}", 0);
+                return null;
+            }
+            $this->SendDebug('Modbus', "Block {$name}: Versuch {$try} fehlgeschlagen ({$err}), Verbindung wird erneuert", 0);
             @fclose($sock);
             $sock = false;
             IPS_Sleep(300);
@@ -1080,27 +1377,46 @@ class PoloAir extends IPSModule
     }
 
     /**
-     * Erkennt automatisch, ob das Gerät die dokumentierte Registernummer 1:1
-     * oder um -1 versetzt (Modbus-Konvention) erwartet.
-     * Prüfregister: 30 (Jahr) muss einen plausiblen Wert liefern.
+     * Erkennt Steuerungsgeneration (C6/C4) und Adress-Offset automatisch.
+     * Prüfregister: Jahr (C6: Reg 30, C4: Reg 1005) muss plausibel sein.
+     * Rückgabe: Adress-Offset (-1 oder 0).
      */
-    private function detectOffset($sock): int
+    private function detectDevice($sock): int
     {
-        $cached = $this->ReadAttributeInteger('AddrOffset');
-        if ($cached === -1 || $cached === 0) {
-            return $cached;
+        $cachedOff = $this->ReadAttributeInteger('AddrOffset');
+        $cachedCtrl = $this->ReadAttributeInteger('CtrlType');
+        $prop = $this->ReadPropertyInteger('Controller');
+
+        if (($cachedOff === -1 || $cachedOff === 0)
+            && ($prop !== self::CTRL_AUTO || $cachedCtrl !== 0)) {
+            return $cachedOff;
         }
 
-        foreach ([-1, 0] as $off) {
-            $r = $this->mbRead($sock, 30 + $off, 1);
-            if ($r !== null && $r[0] >= 2016 && $r[0] <= 2099) {
-                $this->WriteAttributeInteger('AddrOffset', $off);
-                $this->SendDebug('Modbus', "Adress-Offset erkannt: {$off} (Jahr {$r[0]})", 0);
-                return $off;
+        // Bei fest eingestellter Steuerung nur deren Jahres-Register prüfen
+        $candidates = [];
+        if ($prop === self::CTRL_C6) {
+            $candidates[] = [self::CTRL_C6, 30];
+        } elseif ($prop === self::CTRL_C4) {
+            $candidates[] = [self::CTRL_C4, 1005];
+        } else {
+            $candidates[] = [self::CTRL_C6, 30];
+            $candidates[] = [self::CTRL_C4, 1005];
+        }
+
+        foreach ($candidates as [$type, $reg]) {
+            foreach ([-1, 0] as $off) {
+                $r = $this->mbRead($sock, $reg + $off, 1);
+                if ($r !== null && $r[0] >= 2016 && $r[0] <= 2099) {
+                    $this->WriteAttributeInteger('AddrOffset', $off);
+                    $this->WriteAttributeInteger('CtrlType', $type);
+                    $name = ($type === self::CTRL_C4) ? 'C4 (PING2)' : 'C6';
+                    $this->SendDebug('Modbus', "Steuerung erkannt: {$name}, Adress-Offset {$off} (Jahr {$r[0]})", 0);
+                    return $off;
+                }
             }
         }
 
-        $this->SendDebug('Modbus', 'Adress-Offset nicht erkennbar, verwende -1 (Modbus-Konvention)', 0);
+        $this->SendDebug('Modbus', 'Steuerung nicht erkennbar, verwende Offset -1', 0);
         return -1;
     }
 
@@ -1115,86 +1431,106 @@ class PoloAir extends IPSModule
         $aq = $this->ReadPropertyBoolean('EnableAirQuality');
         $energy = $this->ReadPropertyBoolean('EnableEnergy');
 
+        // Solange die Steuerung nicht erkannt ist, beide Sätze anlegen;
+        // nach der Erkennung räumt MaintainVariable die falschen wieder ab.
+        $ctrl = $this->ctrl();
+        $c6 = ($ctrl !== self::CTRL_C4);
+        $c4 = ($ctrl !== self::CTRL_C6);
+
         // [Ident, Name, Typ (0=bool,1=int,2=float,3=string), Profil, Position, anlegen?, Aktion?]
         $vars = [
+            // --- gemeinsam ---
             ['Power', 'Gerät Ein/Aus', 0, '~Switch', 10, true, $w],
-            ['Modus', 'Betriebsmodus', 1, 'PAIR.Modus', 11, true, $w],
-            ['EcoMode', 'ECO-Modus', 0, '~Switch', 12, true, $w],
-            ['AutoMode', 'AUTO-Modus', 0, '~Switch', 13, true, $w],
             ['StatusText', 'Status', 3, '', 14, true, false],
-            ['NaechsterModus', 'Nächster Modus (Zeitplan)', 1, 'PAIR.Modus', 15, true, false],
-            ['TempKontrolle', 'Temperatur-Regelung', 1, 'PAIR.TempKontrolle', 16, true, $w],
-
+            ['AutoMode', 'AUTO-Modus', 0, '~Switch', 13, true, $w],
             ['Ventilator', 'Ventilatoren', 0, 'PAIR.Aktiv', 20, true, false],
             ['Rotor', 'Wärmetauscher aktiv', 0, 'PAIR.Aktiv', 21, true, false],
             ['Heizen', 'Heizen', 0, 'PAIR.Aktiv', 22, true, false],
             ['Kuehlen', 'Kühlen', 0, 'PAIR.Aktiv', 23, true, false],
-            ['FreiesHeizen', 'Freies Heizen', 0, 'PAIR.Aktiv', 24, true, false],
-            ['FreiesKuehlen', 'Freie Kühlung (Bypass)', 0, 'PAIR.Aktiv', 25, true, false],
-            ['Stoerung', 'Störung (F-Alarm)', 0, '~Alert', 26, true, false],
-            ['Warnung', 'Warnung (W-Alarm)', 0, '~Alert', 27, true, false],
-            ['AlarmAnzahl', 'Aktive Alarme', 1, '', 28, true, false],
-            ['AlarmText', 'Alarm-Codes', 3, '', 29, true, false],
-
-            ['AussenTemp', 'Außenluft-Temperatur', 2, 'PAIR.TempC', 40, true, false],
+            ['Stoerung', 'Störung', 0, '~Alert', 26, true, false],
+            ['Warnung', 'Warnung', 0, '~Alert', 27, true, false],
+            ['AlarmText', 'Alarm-Meldungen', 3, '', 29, true, false],
             ['ZuluftTemp', 'Zuluft-Temperatur', 2, 'PAIR.TempC', 41, true, false],
-            ['AbluftTemp', 'Abluft-Temperatur', 2, 'PAIR.TempC', 42, true, false],
             ['WasserTemp', 'Wasserregister-Temperatur', 2, 'PAIR.TempC', 43, true, false],
-
-            ['ZuluftStrom', 'Zuluft-Menge aktuell', 1, 'PAIR.Flow', 50, true, false],
-            ['AbluftStrom', 'Abluft-Menge aktuell', 1, 'PAIR.Flow', 51, true, false],
             ['ZuluftVent', 'Zuluft-Ventilator', 2, 'PAIR.Prozent', 52, true, false],
             ['AbluftVent', 'Abluft-Ventilator', 2, 'PAIR.Prozent', 53, true, false],
             ['Waermetauscher', 'Wärmetauscher-Leistung', 2, 'PAIR.Prozent', 54, true, false],
             ['ElHeizer', 'Elektrischer Heizer', 2, 'PAIR.Prozent', 55, true, false],
-            ['FilterVerschmutzung', 'Filter-Verschmutzung', 1, 'PAIR.Pct', 56, true, false],
-            ['Luftklappen', 'Luftklappen', 1, 'PAIR.Pct', 57, true, false],
+            ['LastUpdate', 'Letzte Aktualisierung', 1, '~UnixTimestamp', 131, true, false],
 
-            ['SollAbwesend', 'Sollwert Abwesend', 2, 'PAIR.TempSoll', 60, $ms, $ms && $w],
-            ['SollNormal', 'Sollwert Normal', 2, 'PAIR.TempSoll', 61, $ms, $ms && $w],
-            ['SollIntensiv', 'Sollwert Intensiv', 2, 'PAIR.TempSoll', 62, $ms, $ms && $w],
-            ['SollBoost', 'Sollwert Boost', 2, 'PAIR.TempSoll', 63, $ms, $ms && $w],
-            ['ZuluftAbwesendSoll', 'Zuluft Abwesend', 1, 'PAIR.FlowSoll', 70, $ms, $ms && $w],
-            ['AbluftAbwesendSoll', 'Abluft Abwesend', 1, 'PAIR.FlowSoll', 71, $ms, $ms && $w],
-            ['ZuluftNormalSoll', 'Zuluft Normal', 1, 'PAIR.FlowSoll', 72, $ms, $ms && $w],
-            ['AbluftNormalSoll', 'Abluft Normal', 1, 'PAIR.FlowSoll', 73, $ms, $ms && $w],
-            ['ZuluftIntensivSoll', 'Zuluft Intensiv', 1, 'PAIR.FlowSoll', 74, $ms, $ms && $w],
-            ['AbluftIntensivSoll', 'Abluft Intensiv', 1, 'PAIR.FlowSoll', 75, $ms, $ms && $w],
-            ['ZuluftBoostSoll', 'Zuluft Boost', 1, 'PAIR.FlowSoll', 76, $ms, $ms && $w],
-            ['AbluftBoostSoll', 'Abluft Boost', 1, 'PAIR.FlowSoll', 77, $ms, $ms && $w],
-            ['KuecheTimer', 'Timer Küche', 1, 'PAIR.Minuten', 78, $ms, $ms && $w],
-            ['FeuerTimer', 'Timer Feuerstätte', 1, 'PAIR.Minuten', 79, $ms, $ms && $w],
-            ['OverrideTimer', 'Timer Override', 1, 'PAIR.Minuten', 80, $ms, $ms && $w],
+            // --- C6 ---
+            ['Modus', 'Betriebsmodus', 1, 'PAIR.Modus', 11, $c6, $c6 && $w],
+            ['EcoMode', 'ECO-Modus', 0, '~Switch', 12, $c6, $c6 && $w],
+            ['NaechsterModus', 'Nächster Modus (Zeitplan)', 1, 'PAIR.Modus', 15, $c6, false],
+            ['TempKontrolle', 'Temperatur-Regelung', 1, 'PAIR.TempKontrolle', 16, $c6, $c6 && $w],
+            ['FreiesHeizen', 'Freies Heizen', 0, 'PAIR.Aktiv', 24, $c6, false],
+            ['FreiesKuehlen', 'Freie Kühlung (Bypass)', 0, 'PAIR.Aktiv', 25, $c6, false],
+            ['AlarmAnzahl', 'Aktive Alarme', 1, '', 28, $c6, false],
+            ['AussenTemp', 'Außenluft-Temperatur', 2, 'PAIR.TempC', 40, $c6, false],
+            ['AbluftTemp', 'Abluft-Temperatur', 2, 'PAIR.TempC', 42, $c6, false],
+            ['ZuluftStrom', 'Zuluft-Menge aktuell', 1, 'PAIR.Flow', 50, $c6, false],
+            ['AbluftStrom', 'Abluft-Menge aktuell', 1, 'PAIR.Flow', 51, $c6, false],
+            ['FilterVerschmutzung', 'Filter-Verschmutzung', 1, 'PAIR.Pct', 56, $c6, false],
+            ['Luftklappen', 'Luftklappen', 1, 'PAIR.Pct', 57, $c6, false],
+            ['SollAbwesend', 'Sollwert Abwesend', 2, 'PAIR.TempSoll', 60, $c6 && $ms, $c6 && $ms && $w],
+            ['SollNormal', 'Sollwert Normal', 2, 'PAIR.TempSoll', 61, $c6 && $ms, $c6 && $ms && $w],
+            ['SollIntensiv', 'Sollwert Intensiv', 2, 'PAIR.TempSoll', 62, $c6 && $ms, $c6 && $ms && $w],
+            ['SollBoost', 'Sollwert Boost', 2, 'PAIR.TempSoll', 63, $c6 && $ms, $c6 && $ms && $w],
+            ['ZuluftAbwesendSoll', 'Zuluft Abwesend', 1, 'PAIR.FlowSoll', 70, $c6 && $ms, $c6 && $ms && $w],
+            ['AbluftAbwesendSoll', 'Abluft Abwesend', 1, 'PAIR.FlowSoll', 71, $c6 && $ms, $c6 && $ms && $w],
+            ['ZuluftNormalSoll', 'Zuluft Normal', 1, 'PAIR.FlowSoll', 72, $c6 && $ms, $c6 && $ms && $w],
+            ['AbluftNormalSoll', 'Abluft Normal', 1, 'PAIR.FlowSoll', 73, $c6 && $ms, $c6 && $ms && $w],
+            ['ZuluftIntensivSoll', 'Zuluft Intensiv', 1, 'PAIR.FlowSoll', 74, $c6 && $ms, $c6 && $ms && $w],
+            ['AbluftIntensivSoll', 'Abluft Intensiv', 1, 'PAIR.FlowSoll', 75, $c6 && $ms, $c6 && $ms && $w],
+            ['ZuluftBoostSoll', 'Zuluft Boost', 1, 'PAIR.FlowSoll', 76, $c6 && $ms, $c6 && $ms && $w],
+            ['AbluftBoostSoll', 'Abluft Boost', 1, 'PAIR.FlowSoll', 77, $c6 && $ms, $c6 && $ms && $w],
+            ['KuecheTimer', 'Timer Küche', 1, 'PAIR.Minuten', 78, $c6 && $ms, $c6 && $ms && $w],
+            ['FeuerTimer', 'Timer Feuerstätte', 1, 'PAIR.Minuten', 79, $c6 && $ms, $c6 && $ms && $w],
+            ['OverrideTimer', 'Timer Override', 1, 'PAIR.Minuten', 80, $c6 && $ms, $c6 && $ms && $w],
+            ['AQAktiv', 'Luftqualität-Regelung', 0, '~Switch', 90, $c6 && $aq, $c6 && $aq && $w],
+            ['AQTempSoll', 'Luftqualität Temperatur-Soll', 2, 'PAIR.TempSoll', 91, $c6 && $aq, $c6 && $aq && $w],
+            ['AQSollwert', 'Luftqualität Sollwert (CO₂/VOC)', 1, 'PAIR.ppm', 92, $c6 && $aq, $c6 && $aq && $w],
+            ['AQFeuchteSoll', 'Feuchtigkeit-Sollwert', 1, 'PAIR.PctSoll', 93, $c6 && $aq, $c6 && $aq && $w],
+            ['AQMinIntensitaet', 'Luftqualität min. Intensität', 1, 'PAIR.PctSoll', 94, $c6 && $aq, $c6 && $aq && $w],
+            ['AQMaxIntensitaet', 'Luftqualität max. Intensität', 1, 'PAIR.PctSoll', 95, $c6 && $aq, $c6 && $aq && $w],
+            ['Leistung', 'Leistungsaufnahme', 1, 'PAIR.W', 100, $c6 && $energy, false],
+            ['Heizleistung', 'Heizleistung', 1, 'PAIR.W', 101, $c6 && $energy, false],
+            ['Rueckgewinnung', 'Wärmerückgewinnung', 1, 'PAIR.W', 102, $c6 && $energy, false],
+            ['Effizienz', 'Wärmetauscher-Effizienz', 1, 'PAIR.Pct', 103, $c6 && $energy, false],
+            ['Energiesparen', 'Energie sparen', 1, 'PAIR.Pct', 104, $c6 && $energy, false],
+            ['SPI', 'SPI (spez. Leistungsaufnahme)', 2, 'PAIR.SPI', 105, $c6 && $energy, false],
+            ['VerbrauchTag', 'Verbrauch heute', 2, 'PAIR.kWh', 110, $c6 && $energy, false],
+            ['VerbrauchMonat', 'Verbrauch Monat', 2, 'PAIR.kWh', 111, $c6 && $energy, false],
+            ['VerbrauchGesamt', 'Verbrauch gesamt', 2, 'PAIR.kWh', 112, $c6 && $energy, false],
+            ['HeizerVerbrauchTag', 'Heizer-Verbrauch heute', 2, 'PAIR.kWh', 113, $c6 && $energy, false],
+            ['HeizerVerbrauchMonat', 'Heizer-Verbrauch Monat', 2, 'PAIR.kWh', 114, $c6 && $energy, false],
+            ['HeizerVerbrauchGesamt', 'Heizer-Verbrauch gesamt', 2, 'PAIR.kWh', 115, $c6 && $energy, false],
+            ['RueckgewinnungTag', 'Rückgewinnung heute', 2, 'PAIR.kWh', 116, $c6 && $energy, false],
+            ['RueckgewinnungMonat', 'Rückgewinnung Monat', 2, 'PAIR.kWh', 117, $c6 && $energy, false],
+            ['RueckgewinnungGesamt', 'Rückgewinnung gesamt', 2, 'PAIR.kWh', 118, $c6 && $energy, false],
+            ['PanelTemp', 'Raumtemperatur (Panel)', 2, 'PAIR.TempC', 120, $c6, false],
+            ['PanelFeuchte', 'Raumfeuchte (Panel)', 1, 'PAIR.Pct', 121, $c6, false],
+            ['PanelAQ', 'Luftqualität (Panel)', 1, 'PAIR.ppm', 122, $c6, false],
+            ['Firmware', 'Firmware', 3, '', 130, $c6, false],
 
-            ['AQAktiv', 'Luftqualität-Regelung', 0, '~Switch', 90, $aq, $aq && $w],
-            ['AQTempSoll', 'Luftqualität Temperatur-Soll', 2, 'PAIR.TempSoll', 91, $aq, $aq && $w],
-            ['AQSollwert', 'Luftqualität Sollwert (CO₂/VOC)', 1, 'PAIR.ppm', 92, $aq, $aq && $w],
-            ['AQFeuchteSoll', 'Feuchtigkeit-Sollwert', 1, 'PAIR.PctSoll', 93, $aq, $aq && $w],
-            ['AQMinIntensitaet', 'Luftqualität min. Intensität', 1, 'PAIR.PctSoll', 94, $aq, $aq && $w],
-            ['AQMaxIntensitaet', 'Luftqualität max. Intensität', 1, 'PAIR.PctSoll', 95, $aq, $aq && $w],
-
-            ['Leistung', 'Leistungsaufnahme', 1, 'PAIR.W', 100, $energy, false],
-            ['Heizleistung', 'Heizleistung', 1, 'PAIR.W', 101, $energy, false],
-            ['Rueckgewinnung', 'Wärmerückgewinnung', 1, 'PAIR.W', 102, $energy, false],
-            ['Effizienz', 'Wärmetauscher-Effizienz', 1, 'PAIR.Pct', 103, $energy, false],
-            ['Energiesparen', 'Energie sparen', 1, 'PAIR.Pct', 104, $energy, false],
-            ['SPI', 'SPI (spez. Leistungsaufnahme)', 2, 'PAIR.SPI', 105, $energy, false],
-            ['VerbrauchTag', 'Verbrauch heute', 2, 'PAIR.kWh', 110, $energy, false],
-            ['VerbrauchMonat', 'Verbrauch Monat', 2, 'PAIR.kWh', 111, $energy, false],
-            ['VerbrauchGesamt', 'Verbrauch gesamt', 2, 'PAIR.kWh', 112, $energy, false],
-            ['HeizerVerbrauchTag', 'Heizer-Verbrauch heute', 2, 'PAIR.kWh', 113, $energy, false],
-            ['HeizerVerbrauchMonat', 'Heizer-Verbrauch Monat', 2, 'PAIR.kWh', 114, $energy, false],
-            ['HeizerVerbrauchGesamt', 'Heizer-Verbrauch gesamt', 2, 'PAIR.kWh', 115, $energy, false],
-            ['RueckgewinnungTag', 'Rückgewinnung heute', 2, 'PAIR.kWh', 116, $energy, false],
-            ['RueckgewinnungMonat', 'Rückgewinnung Monat', 2, 'PAIR.kWh', 117, $energy, false],
-            ['RueckgewinnungGesamt', 'Rückgewinnung gesamt', 2, 'PAIR.kWh', 118, $energy, false],
-
-            ['PanelTemp', 'Raumtemperatur (Panel)', 2, 'PAIR.TempC', 120, true, false],
-            ['PanelFeuchte', 'Raumfeuchte (Panel)', 1, 'PAIR.Pct', 121, true, false],
-            ['PanelAQ', 'Luftqualität (Panel)', 1, 'PAIR.ppm', 122, true, false],
-
-            ['Firmware', 'Firmware', 3, '', 130, true, false],
-            ['LastUpdate', 'Letzte Aktualisierung', 1, '~UnixTimestamp', 131, true, false]
+            // --- C4 (PING2) ---
+            ['Stufe', 'Lüftungsstufe', 1, 'PAIR.Stufe', 11, $c4, $c4 && $w],
+            ['Saison', 'Saison (Winter)', 0, 'PAIR.Saison', 12, $c4, $c4 && $w],
+            ['SollTemp', 'Temperatur-Sollwert', 2, 'PAIR.TempSollC4', 44, $c4, $c4 && $w],
+            ['TempKorrektur', 'Temperatur-Korrektur', 2, 'PAIR.TempKorr', 45, $c4, $c4 && $w],
+            ['WasserHeizung', 'Wasser-Heizung', 2, 'PAIR.Prozent', 58, $c4, false],
+            ['WasserKuehlung', 'Wasser-Kühlung', 2, 'PAIR.Prozent', 59, $c4, false],
+            ['ZuluftStufe1', 'Zuluft-Intensität Stufe 1', 1, 'PAIR.PctSoll', 70, $c4 && $ms, $c4 && $ms && $w],
+            ['ZuluftStufe2', 'Zuluft-Intensität Stufe 2', 1, 'PAIR.PctSoll', 71, $c4 && $ms, $c4 && $ms && $w],
+            ['ZuluftStufe3', 'Zuluft-Intensität Stufe 3', 1, 'PAIR.PctSoll', 72, $c4 && $ms, $c4 && $ms && $w],
+            ['ZuluftStufe4', 'Zuluft-Intensität Stufe 4', 1, 'PAIR.PctSoll', 73, $c4 && $ms, $c4 && $ms && $w],
+            ['AbluftStufe1', 'Abluft-Intensität Stufe 1', 1, 'PAIR.PctSoll', 74, $c4 && $ms, $c4 && $ms && $w],
+            ['AbluftStufe2', 'Abluft-Intensität Stufe 2', 1, 'PAIR.PctSoll', 75, $c4 && $ms, $c4 && $ms && $w],
+            ['AbluftStufe3', 'Abluft-Intensität Stufe 3', 1, 'PAIR.PctSoll', 76, $c4 && $ms, $c4 && $ms && $w],
+            ['AbluftStufe4', 'Abluft-Intensität Stufe 4', 1, 'PAIR.PctSoll', 77, $c4 && $ms, $c4 && $ms && $w],
+            ['OVREnable', 'Override (OVR) aktiv', 0, '~Switch', 85, $c4, $c4 && $w],
+            ['OVRTime', 'Override-Laufzeit', 1, 'PAIR.OVRMin', 86, $c4, $c4 && $w],
+            ['OVRRest', 'Override-Restzeit', 1, 'PAIR.OVRMin', 87, $c4, false]
         ];
 
         foreach ($vars as [$ident, $name, $type, $profile, $pos, $keep, $action]) {
@@ -1212,6 +1548,8 @@ class PoloAir extends IPSModule
         $this->ProfileFloat('PAIR.TempC', ' °C', 1, 0, 0, 0, 'Temperature');
         $this->ProfileFloat('PAIR.Prozent', ' %', 1, 0, 100, 0, 'Intensity');
         $this->ProfileFloat('PAIR.TempSoll', ' °C', 1, 5, 40, 0.5, 'Temperature');
+        $this->ProfileFloat('PAIR.TempSollC4', ' °C', 1, 10, 30, 0.5, 'Temperature');
+        $this->ProfileFloat('PAIR.TempKorr', ' K', 1, -9, 9, 0.5, 'Temperature');
         $this->ProfileFloat('PAIR.kWh', ' kWh', 1, 0, 0, 0, 'Electricity');
         $this->ProfileFloat('PAIR.SPI', ' W/(m³/h)', 2, 0, 0, 0, 'Graph');
 
@@ -1222,12 +1560,30 @@ class PoloAir extends IPSModule
         $this->ProfileInt('PAIR.W', ' W', 0, 0, 0, 'Electricity');
         $this->ProfileInt('PAIR.ppm', ' ppm', 0, 2000, 50, 'Leaf');
         $this->ProfileInt('PAIR.Minuten', ' min', 0, 300, 5, 'Clock');
+        $this->ProfileInt('PAIR.OVRMin', ' min', 0, 90, 5, 'Clock');
 
         if (!IPS_VariableProfileExists('PAIR.Aktiv')) {
             IPS_CreateVariableProfile('PAIR.Aktiv', 0);
             IPS_SetVariableProfileIcon('PAIR.Aktiv', 'Power');
             IPS_SetVariableProfileAssociation('PAIR.Aktiv', 0, 'Aus', '', -1);
             IPS_SetVariableProfileAssociation('PAIR.Aktiv', 1, 'An', '', 0x00A65E);
+        }
+
+        if (!IPS_VariableProfileExists('PAIR.Saison')) {
+            IPS_CreateVariableProfile('PAIR.Saison', 0);
+            IPS_SetVariableProfileIcon('PAIR.Saison', 'Temperature');
+            IPS_SetVariableProfileAssociation('PAIR.Saison', 0, 'Sommer', '', 0xE8A33D);
+            IPS_SetVariableProfileAssociation('PAIR.Saison', 1, 'Winter', '', 0x4DC3F4);
+        }
+
+        if (!IPS_VariableProfileExists('PAIR.Stufe')) {
+            IPS_CreateVariableProfile('PAIR.Stufe', 1);
+            IPS_SetVariableProfileIcon('PAIR.Stufe', 'Ventilation');
+            IPS_SetVariableProfileAssociation('PAIR.Stufe', 0, 'Standby', '', -1);
+            IPS_SetVariableProfileAssociation('PAIR.Stufe', 1, 'Stufe 1', '', 0x3D9EE8);
+            IPS_SetVariableProfileAssociation('PAIR.Stufe', 2, 'Stufe 2', '', 0x00A65E);
+            IPS_SetVariableProfileAssociation('PAIR.Stufe', 3, 'Stufe 3', '', 0xE8A33D);
+            IPS_SetVariableProfileAssociation('PAIR.Stufe', 4, 'Stufe 4', '', 0xE86A3D);
         }
 
         if (!IPS_VariableProfileExists('PAIR.Modus')) {
@@ -1339,24 +1695,35 @@ class PoloAir extends IPSModule
 
             $out = '';
             try {
-                $off = $this->detectOffset($sock);
-                $out .= "Adress-Offset: {$off}\n";
+                $off = $this->detectDevice($sock);
+                $ctrl = $this->ctrl();
+                $ctrlName = [self::CTRL_AUTO => 'unbekannt', self::CTRL_C6 => 'C6', self::CTRL_C4 => 'C4 (PING2)'][$ctrl];
+                $out .= "Steuerung: {$ctrlName}, Adress-Offset: {$off}\n";
 
-                $blocks = [
-                    ['Hauptkontrolle', 1, 34],
-                    ['Einstellungsmodi', 100, 46],
-                    ['Eco/Luftqualität', 200, 15],
-                    ['Alarme', 600, 11],
-                    ['Überwachung', 900, 27],
-                    ['Verbrauch', 927, 19],
-                    ['Panel', 946, 6],
-                    ['Firmware', 1000, 2]
-                ];
+                if ($ctrl === self::CTRL_C4) {
+                    $blocks = [
+                        ['General', 1000, 14],
+                        ['Ventilation', 1100, 17],
+                        ['Temperatur', 1200, 6]
+                    ];
+                } else {
+                    $blocks = [
+                        ['Hauptkontrolle', 1, 34],
+                        ['Einstellungsmodi', 100, 46],
+                        ['Eco/Luftqualität', 200, 15],
+                        ['Alarme', 600, 11],
+                        ['Überwachung', 900, 27],
+                        ['Verbrauch', 927, 19],
+                        ['Panel', 946, 6],
+                        ['Firmware', 1000, 2]
+                    ];
+                }
                 foreach ($blocks as [$name, $start, $qty]) {
                     $out .= "\n== {$name} ==\n";
-                    $r = $this->mbRead($sock, $start + $off, $qty);
+                    $err = '';
+                    $r = $this->mbRead($sock, $start + $off, $qty, $err);
                     if ($r === null) {
-                        $out .= "keine Antwort\n";
+                        $out .= "keine Antwort ({$err})\n";
                         continue;
                     }
                     foreach ($r as $i => $raw) {

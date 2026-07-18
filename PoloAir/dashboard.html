@@ -90,6 +90,10 @@ body.rotor-on .rotorgroup{animation:spin 7s linear infinite}
 body.rotor-on .rotorseg{stroke:#7e93a8}
 .bypass{opacity:0;transition:opacity .6s}
 body.bypass .bypass{opacity:1}
+/* Steuerungsabhängige Sichtbarkeit (C6 vs. C4/PING2) */
+body.c4 .c6only{display:none!important}
+body:not(.c4) .c4only{display:none!important}
+.filt-idle{fill:var(--pipe-idle)}
 .heater{opacity:.15;transition:opacity .5s}
 body.heat-on .heater{opacity:1}
 .filt-ok{fill:var(--ok)} .filt-warn{fill:var(--warn)} .filt-bad{fill:var(--err)}
@@ -175,7 +179,7 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
   </div>
   <div class="badges" id="badges"></div>
   <button class="pwr" id="btnPower" onclick="setVal('Power', !D.Power)">–</button>
-  <select id="selModus" onchange="setVal('Modus',parseInt(this.value))">
+  <select id="selModus" onchange="modeChanged(parseInt(this.value))">
     <option value="1">Abwesend</option>
     <option value="2">Normal</option>
     <option value="3">Intensiv</option>
@@ -210,8 +214,8 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
     <rect x="340" y="55" width="310" height="335" rx="16" class="unit-box"/>
     <text x="495" y="83" text-anchor="middle" class="mid" id="unitname">POLO-AIR</text>
 
-    <!-- Filter im Außenluft-Pfad -->
-    <g id="filtersym">
+    <!-- Filter im Außenluft-Pfad (nur C6 liefert Filterdaten) -->
+    <g id="filtersym" class="c6only">
       <rect x="360" y="118" width="16" height="44" rx="3" fill="#0b0f14" stroke="var(--line)"/>
       <path d="M364,122 v36 M368,122 v36 M372,122 v36" stroke="#5c6a79" stroke-width="1.4"/>
       <circle id="filterdot" cx="368" cy="108" r="5" class="filt-ok"/>
@@ -307,28 +311,38 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
     <div class="hero" id="t_modus">–</div>
     <div class="sub" id="t_status">–</div>
     <div class="row2">
-      <button class="toggle" id="btnEco" onclick="setVal('EcoMode',!D.EcoMode)">ECO</button>
+      <button class="toggle c6only" id="btnEco" onclick="setVal('EcoMode',!D.EcoMode)">ECO</button>
       <button class="toggle" id="btnAuto" onclick="setVal('AutoMode',!D.AutoMode)">AUTO</button>
+      <button class="toggle c4only" id="btnSaison" onclick="setVal('Saison',!D.Saison)">Saison</button>
     </div>
-    <div class="kv"><span class="k">Nächster Modus</span><span class="v" id="t_next">–</span></div>
+    <div class="kv c6only"><span class="k">Nächster Modus</span><span class="v" id="t_next">–</span></div>
+    <div class="row2 c4only"><span class="sub">Sollwert</span>
+      <div class="stepper" data-ident="SollTemp" data-step="0.5" data-dec="1" data-unit=" °C">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2 c4only"><span class="sub">Korrektur</span>
+      <div class="stepper" data-ident="TempKorrektur" data-step="0.5" data-dec="1" data-unit=" K">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
   </div>
 
   <div class="tile" id="tileLuft">
     <h3><span class="ico">💨</span>Luftmengen</h3>
-    <div class="kv"><span class="k">Zuluft</span><span class="v" id="t_zuluft">–</span></div>
+    <div class="kv c6only"><span class="k">Zuluft</span><span class="v" id="t_zuluft">–</span></div>
     <div class="kv"><span class="k">Zuluft-Ventilator</span><span class="v" id="t_supfan">–</span></div>
     <div class="sep"></div>
-    <div class="kv"><span class="k">Abluft</span><span class="v" id="t_abluft">–</span></div>
+    <div class="kv c6only"><span class="k">Abluft</span><span class="v" id="t_abluft">–</span></div>
     <div class="kv"><span class="k">Abluft-Ventilator</span><span class="v" id="t_extfan">–</span></div>
     <div class="kv" id="row_klappen"><span class="k">Luftklappen</span><span class="v" id="t_klappen">–</span></div>
   </div>
 
   <div class="tile" id="tileWRG">
     <h3><span class="ico">♻️</span>Wärmerückgewinnung</h3>
-    <div class="hero"><span id="t_eff">–</span><small> Effizienz</small></div>
-    <div class="kv"><span class="k">Rückgewinnung</span><span class="v" id="t_rueck">–</span></div>
+    <div class="hero"><span id="t_eff">–</span><small id="t_efflabel"> Effizienz</small></div>
+    <div class="kv c6only"><span class="k">Rückgewinnung</span><span class="v" id="t_rueck">–</span></div>
     <div class="kv"><span class="k">Wärmetauscher</span><span class="v" id="t_wt">–</span></div>
-    <div class="kv"><span class="k">Energie sparen</span><span class="v" id="t_sparen">–</span></div>
+    <div class="kv c6only"><span class="k">Energie sparen</span><span class="v" id="t_sparen">–</span></div>
+    <div class="kv" id="row_elheizer"><span class="k">E-Heizer</span><span class="v" id="t_elheizer">–</span></div>
+    <div class="kv c4only"><span class="k">Wasser-Heizung</span><span class="v" id="t_wheiz">–</span></div>
+    <div class="kv c4only"><span class="k">Wasser-Kühlung</span><span class="v" id="t_wkuehl">–</span></div>
   </div>
 
   <div class="tile" id="tileEnergie">
@@ -342,12 +356,12 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
 
   <div class="tile" id="tileFilter">
     <h3><span class="ico">🧰</span>Filter &amp; Alarme</h3>
-    <div class="row2">
+    <div class="row2 c6only">
       <div class="hero"><span id="t_filter">–</span><small> Filter</small></div>
     </div>
-    <div class="bar"><i id="filterbar"></i></div>
+    <div class="bar c6only"><i id="filterbar"></i></div>
     <div class="kv"><span class="k">Aktive Alarme</span><span class="v" id="t_alarme">–</span></div>
-    <button class="toggle" id="btnAlarmReset" onclick="resetAlarms()">Alarme quittieren</button>
+    <button class="toggle c6only" id="btnAlarmReset" onclick="resetAlarms()">Alarme quittieren</button>
   </div>
 
 </section>
@@ -355,6 +369,50 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
 
 <div id="pageDetails" style="display:none">
 <section class="tiles tiles-lg">
+
+  <div class="tile c4only" id="tileStufenZu">
+    <h3><span class="ico">➡️</span>Zuluft-Intensität je Stufe</h3>
+    <div class="row2"><span class="sub">Stufe 1</span>
+      <div class="stepper" data-ident="ZuluftStufe1" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 2</span>
+      <div class="stepper" data-ident="ZuluftStufe2" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 3</span>
+      <div class="stepper" data-ident="ZuluftStufe3" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 4</span>
+      <div class="stepper" data-ident="ZuluftStufe4" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+  </div>
+
+  <div class="tile c4only" id="tileStufenAb">
+    <h3><span class="ico">⬅️</span>Abluft-Intensität je Stufe</h3>
+    <div class="row2"><span class="sub">Stufe 1</span>
+      <div class="stepper" data-ident="AbluftStufe1" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 2</span>
+      <div class="stepper" data-ident="AbluftStufe2" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 3</span>
+      <div class="stepper" data-ident="AbluftStufe3" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="row2"><span class="sub">Stufe 4</span>
+      <div class="stepper" data-ident="AbluftStufe4" data-step="5" data-dec="0" data-unit=" %">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+  </div>
+
+  <div class="tile c4only" id="tileOVR">
+    <h3><span class="ico">⏱️</span>Override (OVR)</h3>
+    <div class="row2">
+      <button class="toggle" id="btnOVR" onclick="setVal('OVREnable',!D.OVREnable)">Override aktiv</button>
+    </div>
+    <div class="row2"><span class="sub">Laufzeit</span>
+      <div class="stepper" data-ident="OVRTime" data-step="5" data-dec="0" data-unit=" min">
+        <button onclick="step(this,-1)">−</button><span class="val">–</span><button onclick="step(this,1)">+</button></div></div>
+    <div class="kv"><span class="k">Restzeit</span><span class="v" id="t_ovrrest">–</span></div>
+    <div class="sub">Der Override-Eingang schaltet das Gerät für die eingestellte Laufzeit auf die Override-Funktion.</div>
+  </div>
 
   <div class="tile" id="tileSoll">
     <h3><span class="ico">🌡️</span>Temperatur-Sollwerte</h3>
@@ -623,16 +681,39 @@ function badge(label, on, cls) {
   return `<span class="badge ${on ? 'on ' + (cls || '') : ''}"><span class="dot"></span>${label}</span>`;
 }
 
+// Modus-/Stufen-Auswahl im Header (C6: Modus 1-4, C4: Stufe 1-3)
+function modeChanged(v) {
+  setVal(D.ctrl === 'C4' ? 'Stufe' : 'Modus', v);
+}
+let selCtrl = '';
+function fillModeSelect(c4) {
+  const sel = $('selModus');
+  sel.innerHTML = '';
+  const opts = c4
+    ? [[1, 'Stufe 1'], [2, 'Stufe 2'], [3, 'Stufe 3']]
+    : [[1, 'Abwesend'], [2, 'Normal'], [3, 'Intensiv'], [4, 'Boost']];
+  for (const [v, t] of opts) {
+    const o = document.createElement('option');
+    o.value = String(v);
+    o.textContent = t;
+    sel.appendChild(o);
+  }
+}
+
 // ---------- Rendern ----------
 function render() {
   for (const k in pending) {
     if (Date.now() - pending[k] > 5000) delete pending[k];
   }
 
+  const c4 = D.ctrl === 'C4';
+  document.body.classList.toggle('c4', c4);
+  if (selCtrl !== D.ctrl) { selCtrl = D.ctrl; fillModeSelect(c4); }
+
   const fan = !!D.Ventilator && !!D.Power;
   document.body.classList.toggle('fan-on', fan);
   document.body.classList.toggle('rotor-on', !!D.Rotor && fan);
-  document.body.classList.toggle('bypass', !!D.FreiesKuehlen);
+  document.body.classList.toggle('bypass', !c4 && !!D.FreiesKuehlen);
   document.body.classList.toggle('heat-on', !!D.Heizen);
   ['f_fresh', 'f_fort', 'f_sup', 'f_ext'].forEach(id => $(id).classList.toggle('on', fan));
 
@@ -642,9 +723,14 @@ function render() {
   b += badge('WRG', !!D.Rotor && fan);
   b += badge('Heizen', !!D.Heizen, 'b-heat');
   b += badge('Kühlen', !!D.Kuehlen, 'b-cool');
-  b += badge('Bypass', !!D.FreiesKuehlen, 'b-cool');
-  b += badge('ECO', !!D.EcoMode);
-  b += badge('AUTO', !!D.AutoMode);
+  if (c4) {
+    b += badge('AUTO', !!D.AutoMode);
+    if (has('Saison')) b += badge(D.Saison ? 'Winter' : 'Sommer', true, D.Saison ? 'b-cool' : 'b-heat');
+  } else {
+    b += badge('Bypass', !!D.FreiesKuehlen, 'b-cool');
+    b += badge('ECO', !!D.EcoMode);
+    b += badge('AUTO', !!D.AutoMode);
+  }
   if (D.Stoerung) b += badge('Störung', true, 'b-err');
   else if (D.Warnung) b += badge('Warnung', true, 'b-err');
   $('badges').innerHTML = b;
@@ -655,10 +741,12 @@ function render() {
   bp.disabled = !D.writeEnabled;
 
   const sel = $('selModus');
-  if (!pending.Modus && has('Modus')) {
-    const m = Number(D.Modus);
+  const modeIdent = c4 ? 'Stufe' : 'Modus';
+  const modeMax = c4 ? 3 : 4;
+  if (!pending[modeIdent] && has(modeIdent)) {
+    const m = Number(D[modeIdent]);
     let opt = $('optCur');
-    if (m >= 1 && m <= 4) {
+    if (m >= 1 && m <= modeMax) {
       if (opt) opt.remove();
       sel.value = String(m);
     } else {
@@ -669,7 +757,7 @@ function render() {
         sel.insertBefore(opt, sel.firstChild);
       }
       opt.value = String(m);
-      opt.textContent = MODE_NAMES[m] || ('Modus ' + m);
+      opt.textContent = c4 ? ('Stufe ' + m) : (MODE_NAMES[m] || ('Modus ' + m));
       sel.value = String(m);
     }
   }
@@ -694,28 +782,42 @@ function render() {
   $('v_extfan').textContent = has('AbluftVent') ? fmtN(D.AbluftVent, 0, ' %') : '–';
   $('v_wt').textContent = has('Waermetauscher') ? fmtN(D.Waermetauscher, 0, ' %') : '–';
 
-  // Wohnraum: Panel-Werte bevorzugen, sonst Abluft als Näherung
+  // Wohnraum: Panel-Werte bevorzugen; C4 zeigt den Sollwert, sonst Abluft als Näherung
   if (has('PanelTemp')) {
     $('v_raum').textContent = fmtN(D.PanelTemp, 1, ' °C');
     $('v_feuchte').textContent = has('PanelFeuchte') ? ('Feuchte ' + fmtN(D.PanelFeuchte, 0, ' %')) : '';
     $('v_aq').textContent = has('PanelAQ') ? ('Luftqualität ' + fmtN(D.PanelAQ, 0, ' ppm')) : '';
+  } else if (c4) {
+    $('v_raum').textContent = fmtT('SollTemp');
+    $('v_feuchte').textContent = 'Sollwert';
+    $('v_aq').textContent = '';
   } else {
     $('v_raum').textContent = fmtT('AbluftTemp');
     $('v_feuchte').textContent = '(Abluft)';
     $('v_aq').textContent = '';
   }
 
-  // Filter-Ampel im Schema
-  const fp = has('FilterVerschmutzung') ? Number(D.FilterVerschmutzung) : -1;
-  const fcls = fp < 0 ? 'filt-ok' : (fp < 50 ? 'filt-ok' : (fp < 80 ? 'filt-warn' : 'filt-bad'));
+  // Filter-Ampel im Schema (nur C6)
+  const fp = (!c4 && has('FilterVerschmutzung')) ? Number(D.FilterVerschmutzung) : -1;
+  const fcls = fp < 0 ? 'filt-idle' : (fp < 50 ? 'filt-ok' : (fp < 80 ? 'filt-warn' : 'filt-bad'));
   $('filterdot').setAttribute('class', fcls);
 
   // Kacheln Anlage
-  $('t_modus').textContent = has('Modus') ? (MODE_NAMES[D.Modus] || D.Modus) : '–';
+  if (c4) {
+    $('t_modus').textContent = D.Power ? (has('Stufe') ? ('Stufe ' + D.Stufe) : 'Betrieb') : 'Aus';
+  } else {
+    $('t_modus').textContent = has('Modus') ? (MODE_NAMES[D.Modus] || D.Modus) : '–';
+  }
   $('t_status').textContent = D.StatusText || '–';
   $('t_next').textContent = has('NaechsterModus') ? (MODE_NAMES[D.NaechsterModus] || D.NaechsterModus) : '–';
   const be = $('btnEco'); be.classList.toggle('on', !!D.EcoMode); be.disabled = !D.writeEnabled;
   const ba = $('btnAuto'); ba.classList.toggle('on', !!D.AutoMode); ba.disabled = !D.writeEnabled;
+  const bs = $('btnSaison');
+  bs.textContent = has('Saison') ? (D.Saison ? 'Winter' : 'Sommer') : 'Saison';
+  bs.classList.toggle('on', !!D.Saison);
+  bs.disabled = !D.writeEnabled;
+  const bo = $('btnOVR'); bo.classList.toggle('on', !!D.OVREnable); bo.disabled = !D.writeEnabled;
+  $('t_ovrrest').textContent = has('OVRRest') ? fmtN(D.OVRRest, 0, ' min') : '–';
 
   $('t_zuluft').textContent = has('ZuluftStrom') ? fmtN(D.ZuluftStrom, 0, flowU()) : '–';
   $('t_abluft').textContent = has('AbluftStrom') ? fmtN(D.AbluftStrom, 0, flowU()) : '–';
@@ -724,10 +826,20 @@ function render() {
   $('row_klappen').style.display = has('Luftklappen') ? '' : 'none';
   $('t_klappen').textContent = has('Luftklappen') ? fmtN(D.Luftklappen, 0, ' %') : '–';
 
-  $('t_eff').textContent = has('Effizienz') ? fmtN(D.Effizienz, 0, ' %') : '–';
+  if (c4) {
+    $('t_eff').textContent = has('Waermetauscher') ? fmtN(D.Waermetauscher, 0, ' %') : '–';
+    $('t_efflabel').textContent = ' Wärmetauscher';
+  } else {
+    $('t_eff').textContent = has('Effizienz') ? fmtN(D.Effizienz, 0, ' %') : '–';
+    $('t_efflabel').textContent = ' Effizienz';
+  }
   $('t_rueck').textContent = has('Rueckgewinnung') ? fmtN(D.Rueckgewinnung, 0, ' W') : '–';
   $('t_wt').textContent = has('Waermetauscher') ? fmtN(D.Waermetauscher, 0, ' %') : '–';
   $('t_sparen').textContent = has('Energiesparen') ? fmtN(D.Energiesparen, 0, ' %') : '–';
+  $('row_elheizer').style.display = has('ElHeizer') ? '' : 'none';
+  $('t_elheizer').textContent = has('ElHeizer') ? fmtN(D.ElHeizer, 0, ' %') : '–';
+  $('t_wheiz').textContent = has('WasserHeizung') ? fmtN(D.WasserHeizung, 0, ' %') : '–';
+  $('t_wkuehl').textContent = has('WasserKuehlung') ? fmtN(D.WasserKuehlung, 0, ' %') : '–';
 
   $('t_leistung').innerHTML = has('Leistung') ? (fmtN(D.Leistung, 0, '') + '<small> W</small>') : '–';
   $('t_vtag').textContent = has('VerbrauchTag') ? fmtN(D.VerbrauchTag, 2, ' kWh') : '–';
@@ -741,10 +853,14 @@ function render() {
   const fb = $('filterbar');
   fb.style.width = (fp < 0 ? 0 : fp) + '%';
   fb.style.background = fp < 50 ? 'var(--ok)' : (fp < 80 ? 'var(--warn)' : 'var(--err)');
-  $('t_alarme').textContent = has('AlarmAnzahl') ? (D.AlarmAnzahl + (D.AlarmText && D.AlarmText !== 'keine' ? ' (' + D.AlarmText + ')' : '')) : '–';
+  if (c4) {
+    $('t_alarme').textContent = D.AlarmText || '–';
+  } else {
+    $('t_alarme').textContent = has('AlarmAnzahl') ? (D.AlarmAnzahl + (D.AlarmText && D.AlarmText !== 'keine' ? ' (' + D.AlarmText + ')' : '')) : '–';
+  }
   $('tileFilter').classList.toggle('err-tile', !!D.Stoerung);
   $('btnAlarmReset').disabled = !D.writeEnabled;
-  $('btnAlarmReset').style.display = (Number(D.AlarmAnzahl) > 0 || D.Stoerung || D.Warnung) ? '' : 'none';
+  $('btnAlarmReset').style.display = (!c4 && (Number(D.AlarmAnzahl) > 0 || D.Stoerung || D.Warnung)) ? '' : 'none';
 
   // Stepper-Werte (nur wenn keine Eingabe aussteht)
   document.querySelectorAll('.stepper').forEach(box => {
@@ -779,16 +895,19 @@ function render() {
     : 'kein Panel';
   $('d_fw').textContent = D.Firmware || '–';
 
-  // Kacheln je nach Konfiguration ausblenden
-  $('tileEnergie').style.display = D.energy === false ? 'none' : '';
-  $('tileEnergieDetail').style.display = D.energy === false ? 'none' : '';
-  $('tileSoll').style.display = D.modeset === false ? 'none' : '';
-  $('tileFlowZu').style.display = D.modeset === false ? 'none' : '';
-  $('tileFlowAb').style.display = D.modeset === false ? 'none' : '';
-  $('tileTimer').style.display = D.modeset === false ? 'none' : '';
-  $('tileAQ').style.display = D.aq === false ? 'none' : '';
+  // Kacheln je nach Steuerung und Konfiguration ausblenden
+  $('tileEnergie').style.display = (c4 || D.energy === false) ? 'none' : '';
+  $('tileEnergieDetail').style.display = (c4 || D.energy === false) ? 'none' : '';
+  $('tileSoll').style.display = (c4 || D.modeset === false) ? 'none' : '';
+  $('tileFlowZu').style.display = (c4 || D.modeset === false) ? 'none' : '';
+  $('tileFlowAb').style.display = (c4 || D.modeset === false) ? 'none' : '';
+  $('tileTimer').style.display = (c4 || D.modeset === false) ? 'none' : '';
+  $('tileAQ').style.display = (c4 || D.aq === false) ? 'none' : '';
+  $('tileStufenZu').style.display = (c4 && D.modeset !== false) ? '' : 'none';
+  $('tileStufenAb').style.display = (c4 && D.modeset !== false) ? '' : 'none';
 
   $('footinfo').textContent = 'Poloplast POLO-AIR · Modbus TCP'
+    + (D.ctrl && D.ctrl !== '?' ? ' · Steuerung ' + (c4 ? 'C4 (PING2)' : 'C6') : '')
     + (D.Firmware ? ' · FW ' + D.Firmware : '') + (D.version ? ' · v' + D.version : '');
 }
 

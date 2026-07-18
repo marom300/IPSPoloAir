@@ -1,9 +1,14 @@
 # IPSPoloAir – Poloplast POLO-AIR Wohnraumlüftung für IP-Symcon
 
 IP-Symcon-Modul zur Anbindung einer **Poloplast POLO-AIR** Komfortwohnraumlüftung
-(z. B. **AIR 250**) über **Modbus TCP**. Die POLO-AIR Geräte basieren auf der
-Komfovent-C6-Steuerung; die Verbindung läuft über den Netzwerkanschluss des Reglers
-(PING2-Adapter), Standard-IP `192.168.0.60`, Port `502`.
+(z. B. **AIR 250**) über **Modbus TCP**. Die POLO-AIR Geräte basieren auf
+Komfovent-Steuerungen – das Modul unterstützt **beide Generationen** und erkennt
+sie automatisch:
+
+- **C6** – neuere Geräte mit Ethernet direkt am Regler (voller Funktionsumfang)
+- **C4** – ältere Geräte mit **PING2-Netzwerkadapter** (reduzierter Registersatz)
+
+Standard-IP `192.168.0.60`, Port `502`.
 
 Das Modul liest zyklisch alle relevanten Werte, macht das Gerät schaltbar
 (Ein/Aus, Betriebsmodus, ECO/AUTO, Sollwerte) und bringt ein fertiges
@@ -31,10 +36,26 @@ HTML-Dashboard mit Anlagenschema mit – im gleichen Stil wie
 - Luftqualitäts-Regelung (aktiv, Temperatur-, CO₂/VOC-, Feuchte-Sollwert, min/max Intensität)
 - Alarme quittieren (`PAIR_ResetAlarms`)
 
-> **Hinweis:** Per Modbus sind als Modus nur *Abwesend, Normal, Intensiv, Boost*
+> **Hinweis C6:** Per Modbus sind als Modus nur *Abwesend, Normal, Intensiv, Boost*
 > schaltbar. Küche/Feuerstätte/Override/Urlaub startet das Gerät selbst
 > (Bedienteil, Zeitplan oder Schalteingänge) – das Modul zeigt sie an und kann
 > ihre Laufzeit-Timer einstellen.
+
+### Funktionsumfang C4 (PING2)
+
+Die ältere C4-Steuerung stellt per Modbus deutlich weniger Daten bereit:
+
+**Lesen:** Ein/Aus, Lüftungsstufe (0–4), AUTO-Modus, Saison (Winter/Sommer),
+Zuluft-Temperatur, Wasserregister-Temperatur, Ventilator-Leistungen (%),
+Wärmetauscher-/Heizer-/Wasserheizung-/Wasserkühlung-Leistung (%),
+Warnungen und Stopp-Codes im Klartext, OVR-Status.
+
+**Schreiben:** Ein/Aus, Stufe 1–3, AUTO-Modus, Saison, Temperatur-Sollwert und
+-Korrektur, Zuluft-/Abluft-Intensität je Stufe (1–4), OVR aktivieren + Laufzeit.
+
+*Nicht verfügbar bei C4:* Außen-/Abluft-Temperatur, Luftmengen in m³/h,
+Filter-Verschmutzung, Energiedaten, Luftqualitäts-Regelung, Alarm-Quittierung
+per Modbus. Das Dashboard blendet die betroffenen Anzeigen automatisch aus.
 
 ## Installation
 
@@ -60,6 +81,7 @@ Voraussetzung: Das Gerät ist per LAN erreichbar und Port 502 ist offen
 | Modbus-Port | `502` | 1–65535 | TCP-Port des Modbus-Servers. |
 | Modbus Unit-ID | `1` | 0–255 | Geräteadresse im Modbus-Frame. Bei Modbus TCP fast immer 1. |
 | Abfrageintervall | `30 s` | 5–3600 s | Zyklus, in dem alle Register gelesen werden. |
+| Steuerungsgeneration | Automatisch | Auto/C6/C4 | Automatische Erkennung über die Jahres-Register (C6: Reg 30, C4: Reg 1005); bei Bedarf fest vorgeben. |
 
 ### Funktionsumfang
 
