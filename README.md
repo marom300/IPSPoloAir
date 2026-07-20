@@ -119,6 +119,7 @@ Aufruf: `http://<Symcon-IP>:3777/hook/poloair`
 | `PAIR_TestConnection(int $id)` | Verbindungstest mit Kurz-Zusammenfassung (Firmware, Modus, Temperaturen). |
 | `PAIR_ResetAlarms(int $id)` | Alle aktiven Alarme quittieren. |
 | `PAIR_DumpRegisters(int $id)` | Alle Registerblöcke als Rohwerte ausgeben (Diagnose). |
+| `PAIR_ScanRegisters(int $id)` | Sucht rein lesend nach Registern, die über die Dokumentation hinaus existieren (z. B. zusätzliche Temperaturfühler). Dauert ~1 Minute. |
 | `IPS_RequestAction($id, 'Modus', 2)` | Beispiel: Modus auf „Normal“ schalten (1=Abwesend, 2=Normal, 3=Intensiv, 4=Boost). |
 
 ## Technische Details

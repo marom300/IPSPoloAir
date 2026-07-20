@@ -1779,6 +1779,105 @@ class PoloAir extends IPSModule
         }
     }
 
+    /**
+     * Sucht Register, die über die Dokumentation hinaus existieren.
+     *
+     * Vorgehen: Je bekanntem Blockanfang wird per Bisektion die größte noch
+     * lesbare Blocklänge ermittelt (das Gerät antwortet auf zu lange Blöcke mit
+     * "Illegal Data Address"), danach werden die Lücken einzeln abgeklopft.
+     * Rein lesend – es wird nichts geschrieben.
+     */
+    public function ScanRegisters(): string
+    {
+        $host = trim($this->ReadPropertyString('Host'));
+        if ($host === '') {
+            return 'Bitte zuerst die IP-Adresse konfigurieren.';
+        }
+        if (!IPS_SemaphoreEnter($this->semName(), 5000)) {
+            return 'Modbus-Zugriff belegt, bitte erneut versuchen.';
+        }
+        try {
+            $sock = $this->mbConnect();
+            if ($sock === false) {
+                return 'Keine Verbindung zum Lüftungsgerät.';
+            }
+            try {
+                $off = $this->detectDevice($sock);
+                $c4 = ($this->ctrl() === self::CTRL_C4);
+
+                // [Blockanfang, dokumentierte Länge, Bezeichnung]
+                $blocks = $c4
+                    ? [[1000, 14, 'General'], [1100, 17, 'Ventilation'], [1200, 6, 'Temperatur'], [1300, 63, 'Zeitplan']]
+                    : [[1, 34, 'Hauptkontrolle'], [100, 46, 'Einstellungsmodi'], [200, 15, 'Eco/Luftqualität'],
+                        [600, 11, 'Alarme'], [900, 27, 'Überwachung'], [927, 19, 'Verbrauch'], [1000, 6, 'Andere']];
+
+                $out = "Register-Suche (rein lesend)\n";
+                $out .= 'Steuerung: ' . ($c4 ? 'C4 (PING2)' : 'C6') . ", Adress-Offset: {$off}\n";
+
+                foreach ($blocks as [$start, $doc, $name]) {
+                    // Größte lesbare Länge per Bisektion (Modbus erlaubt max. 125)
+                    $lo = 0;
+                    $hi = 125;
+                    while ($lo < $hi) {
+                        $mid = (int) ceil(($lo + $hi) / 2);
+                        if ($this->mbRead($sock, $start + $off, $mid) !== null) {
+                            $lo = $mid;
+                        } else {
+                            $hi = $mid - 1;
+                        }
+                    }
+
+                    $out .= "\n== {$name} (ab {$start}) ==\n";
+                    $out .= "dokumentiert: {$doc} Register, lesbar: {$lo}\n";
+
+                    if ($lo > $doc) {
+                        $out .= "-> {$lo} statt {$doc} Register lesbar, undokumentierte Werte:\n";
+                        $extra = $this->mbRead($sock, $start + $doc + $off, $lo - $doc);
+                        if ($extra !== null) {
+                            foreach ($extra as $i => $raw) {
+                                $reg = $start + $doc + $i;
+                                $s = $this->s16($raw);
+                                $hint = ($s > -500 && $s < 1200 && $raw !== 0) ? '  <- könnte Temperatur sein' : '';
+                                $out .= sprintf("%d: %u  [signed=%d  /10=%.1f]%s\n", $reg, $raw, $s, $s / 10, $hint);
+                            }
+                        }
+                    } elseif ($lo < $doc) {
+                        $out .= "-> Achtung: weniger lesbar als dokumentiert.\n";
+                    } else {
+                        $out .= "-> keine zusätzlichen Register.\n";
+                    }
+                }
+
+                // Lücken zwischen den Blöcken einzeln abklopfen
+                $gaps = $c4
+                    ? [[1014, 1099], [1117, 1199], [1206, 1299]]
+                    : [[35, 99], [146, 199], [215, 299]];
+                $out .= "\n== Lücken zwischen den Blöcken ==\n";
+                $found = 0;
+                foreach ($gaps as [$from, $to]) {
+                    for ($reg = $from; $reg <= $to; $reg++) {
+                        $r = $this->mbRead($sock, $reg + $off, 1);
+                        if ($r !== null) {
+                            $s = $this->s16($r[0]);
+                            $hint = ($s > -500 && $s < 1200 && $r[0] !== 0) ? '  <- könnte Temperatur sein' : '';
+                            $out .= sprintf("%d: %u  [signed=%d  /10=%.1f]%s\n", $reg, $r[0], $s, $s / 10, $hint);
+                            $found++;
+                        }
+                    }
+                }
+                if ($found === 0) {
+                    $out .= "keine weiteren Register gefunden.\n";
+                }
+
+                return $out;
+            } finally {
+                fclose($sock);
+            }
+        } finally {
+            IPS_SemaphoreLeave($this->semName());
+        }
+    }
+
     // =====================================================================
     // WebHook-Registrierung
     // =====================================================================

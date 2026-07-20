@@ -114,6 +114,11 @@
             "onClick": "echo PAIR_DumpRegisters($id);"
         },
         {
+            "type": "Button",
+            "caption": "Nach undokumentierten Registern suchen (dauert ~1 Minute)",
+            "onClick": "echo PAIR_ScanRegisters($id);"
+        },
+        {
             "type": "Label",
             "caption": "Dashboard: http://<Symcon-IP>:3777/hook/poloair"
         },
