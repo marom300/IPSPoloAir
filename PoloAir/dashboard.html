@@ -111,6 +111,9 @@ body:not(.c4) .c4only{display:none!important}
 .wpbar{position:relative;height:16px;border-radius:8px;overflow:hidden;background:var(--card2);
   border:1px solid var(--line);flex:1;min-width:120px}
 .wpseg{position:absolute;top:0;bottom:0}
+.wpnow{position:absolute;top:0;bottom:0;width:2px;background:#fff;box-shadow:0 0 5px rgba(255,255,255,.9)}
+.schedrow.today{border-color:rgba(61,220,132,.4)}
+.schedrow.today .wpdayslbl{color:var(--ok)}
 .wpdayslbl{width:74px;font-weight:600;font-size:12px;flex:none}
 .wplegend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--dim)}
 .wplegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
@@ -796,7 +799,7 @@ function daysLabel(mask) {
   return days.map(d => DAY_SHORT[d]).join(', ');
 }
 
-function wpBar(points) {
+function wpBar(points, showNow) {
   const pts = [...points].sort((a, b) => a.minute - b.minute);
   const seg = (f, t, a) =>
     `<div class="wpseg" style="left:${(f / 14.4).toFixed(2)}%;width:${((t - f) / 14.4).toFixed(2)}%;background:${WP_ACT[a] ? WP_ACT[a].c : '#555'}"></div>`;
@@ -806,7 +809,17 @@ function wpBar(points) {
   }
   // vor dem ersten Punkt gilt die Aktion vom Vortag (= letzter Punkt)
   if (pts.length && pts[0].minute > 0) h += seg(0, pts[0].minute, pts[pts.length - 1].action);
+  if (showNow) h += '<div class="wpnow"></div>';
   return `<div class="wpbar">${h}</div>`;
+}
+
+let wpToday = -1;
+function updateWpNow() {
+  const now = new Date();
+  const pct = ((now.getHours() * 60 + now.getMinutes()) / 14.4).toFixed(2) + '%';
+  document.querySelectorAll('.wpnow').forEach(el => el.style.left = pct);
+  // beim Tageswechsel wandert die Heute-Markierung in die passende Gruppe
+  if (wpToday >= 0 && wpToday !== (now.getDay() + 6) % 7 && WPLAN && WPLAN.groups) renderWeekplan();
 }
 
 function renderWeekplan() {
@@ -816,12 +829,17 @@ function renderWeekplan() {
     $('wpLegend').innerHTML = '';
     return;
   }
+  const today = (new Date().getDay() + 6) % 7; // 0 = Montag
+  wpToday = today;
   let h = '';
   WPLAN.groups.forEach((g, i) => {
-    h += `<div class="schedrow" onclick="openWp(${i})"><span class="wpdayslbl">${daysLabel(g.days)}</span>${wpBar(g.points)}</div>`;
+    const isToday = !!(g.days & (1 << today));
+    h += `<div class="schedrow${isToday ? ' today' : ''}" onclick="openWp(${i})">` +
+      `<span class="wpdayslbl">${daysLabel(g.days)}</span>${wpBar(g.points, isToday)}</div>`;
   });
   $('wpGrid').innerHTML = h;
   $('wpLegend').innerHTML = Object.values(WP_ACT).map(a => `<span><i style="background:${a.c}"></i>${a.n}</span>`).join('');
+  updateWpNow();
 }
 
 async function createWeekplan() {
@@ -1320,6 +1338,8 @@ function render() {
   $('tileAQ').style.display = (c4 || D.aq === false) ? 'none' : '';
   $('tileStufenZu').style.display = (c4 && D.modeset !== false) ? '' : 'none';
   $('tileStufenAb').style.display = (c4 && D.modeset !== false) ? '' : 'none';
+
+  updateWpNow();
 
   // Wochenplan aktiv/pausiert
   const bw = $('btnWpActive');
