@@ -128,7 +128,11 @@ body.heat-on .heater{opacity:1}
 .stepper button{background:none;border:none;color:var(--txt);width:30px;height:30px;font-size:16px;cursor:pointer}
 .stepper button:hover{background:var(--line)}
 .stepper button:disabled{color:var(--line);cursor:default}
-.stepper .val{min-width:70px;text-align:center;font-weight:600;font-size:13px;font-variant-numeric:tabular-nums}
+.stepper .val{min-width:70px;text-align:center;font-weight:600;font-size:13px;font-variant-numeric:tabular-nums;cursor:text}
+/* Direkteingabe: Klick auf den Wert macht ihn tippbar */
+.stepper input.val,.stepper input.valedit{background:none;border:none;color:var(--txt);width:70px;min-width:0;
+  text-align:center;font-family:inherit;font-weight:600;font-size:13px;font-variant-numeric:tabular-nums;outline:none;padding:0}
+.stepper input:focus{background:rgba(255,255,255,.06);border-radius:5px}
 .toggle{background:var(--card2);border:1px solid var(--line);border-radius:9px;color:var(--dim);
   padding:5px 8px;font-size:12px;cursor:pointer;white-space:nowrap;flex:1}
 .toggle.on{color:var(--txt);border-color:rgba(61,220,132,.5);background:rgba(61,220,132,.08)}
@@ -752,9 +756,9 @@ function renderSchedEditor() {
       <div class="sub">Zeitfenster ${e + 1}${ev.start === ev.stop ? ' (inaktiv – Start gleich Stopp)' : ''}</div>
       <div class="row2"><div class="nav">${lvlBtns}</div></div>
       <div class="row2"><span class="sub">Start</span>
-        <div class="stepper"><button onclick="schedTime(${e},'start',-15)">−</button><span class="val">${fmtTime(ev.start)}</span><button onclick="schedTime(${e},'start',15)">+</button></div></div>
+        <div class="stepper"><button onclick="schedTime(${e},'start',-15)">−</button><input class="val" inputmode="numeric" value="${fmtTime(ev.start)}" onfocus="this.select()" onchange="schedTimeInput(this,${e},'start')" onkeydown="if(event.key==='Enter')this.blur()"><button onclick="schedTime(${e},'start',15)">+</button></div></div>
       <div class="row2"><span class="sub">Stopp</span>
-        <div class="stepper"><button onclick="schedTime(${e},'stop',-15)">−</button><span class="val">${fmtTime(ev.stop)}</span><button onclick="schedTime(${e},'stop',15)">+</button></div></div>`;
+        <div class="stepper"><button onclick="schedTime(${e},'stop',-15)">−</button><input class="val" inputmode="numeric" value="${fmtTime(ev.stop)}" onfocus="this.select()" onchange="schedTimeInput(this,${e},'stop')" onkeydown="if(event.key==='Enter')this.blur()"><button onclick="schedTime(${e},'stop',15)">+</button></div></div>`;
   }
   $('schedEvents').innerHTML = h;
 }
@@ -762,6 +766,29 @@ function renderSchedEditor() {
 function schedLvl(e, v) { schedEdit[e].level = v; renderSchedEditor(); }
 function schedTime(e, k, delta) {
   schedEdit[e][k] = Math.max(0, Math.min(1440, schedEdit[e][k] + delta));
+  renderSchedEditor();
+}
+
+// Uhrzeit-Direkteingabe: akzeptiert "6:30", "06:30", "630", "0630" oder "6"
+function parseTime(s) {
+  s = s.trim().replace(',', ':').replace('.', ':');
+  let h, m;
+  const mm = s.match(/^(\d{1,2}):(\d{1,2})$/);
+  if (mm) { h = +mm[1]; m = +mm[2]; }
+  else if (/^\d{3,4}$/.test(s)) { h = Math.floor(+s / 100); m = +s % 100; }
+  else if (/^\d{1,2}$/.test(s)) { h = +s; m = 0; }
+  else return null;
+  if (h > 24 || m > 59 || (h === 24 && m > 0)) return null;
+  return h * 60 + m;
+}
+function schedTimeInput(inp, e, k) {
+  const v = parseTime(inp.value);
+  if (v === null) {
+    inp.value = fmtTime(schedEdit[e][k]);
+    toast('Ungültige Zeit – z. B. 6:30 oder 0630 eingeben');
+    return;
+  }
+  schedEdit[e][k] = v;
   renderSchedEditor();
 }
 function closeSched() { $('schedOverlay').classList.remove('show'); }
@@ -803,6 +830,55 @@ function step(btn, dir) {
     setVal(ident, cur);
   }, 900);
 }
+
+// Direkteingabe für Stepper-Werte: Klick auf die Zahl -> Eingabefeld
+// (Enter/Wegklicken übernimmt, Escape bricht ab; +/- bleiben erhalten)
+function editVal(span) {
+  const box = span.closest('.stepper');
+  const ident = box.dataset.ident;
+  if (!D.writeEnabled || !ident || box.querySelector('.valedit')) return;
+  const dec = parseInt(box.dataset.dec);
+  const cur = box.dataset.cur !== undefined ? parseFloat(box.dataset.cur) : (has(ident) ? Number(D[ident]) : NaN);
+
+  const inp = document.createElement('input');
+  inp.className = 'valedit';
+  inp.inputMode = 'decimal';
+  inp.value = isNaN(cur) ? '' : String(cur).replace('.', ',');
+  span.style.display = 'none';
+  span.after(inp);
+  pending[ident] = Date.now(); // Live-Refresh während der Eingabe fernhalten
+
+  const done = commit => {
+    inp.onblur = null;
+    let v = NaN;
+    if (commit) v = parseFloat(inp.value.replace(',', '.'));
+    inp.remove();
+    span.style.display = '';
+    if (isNaN(v)) {
+      delete pending[ident];
+      return;
+    }
+    box.dataset.cur = v;
+    pending[ident] = Date.now();
+    span.textContent = fmtN(v, dec, box.dataset.flow ? flowU() : box.dataset.unit);
+    clearTimeout(stepTimers[ident]);
+    stepTimers[ident] = setTimeout(() => {
+      delete box.dataset.cur;
+      setVal(ident, v);
+    }, 400);
+  };
+  inp.onblur = () => done(true);
+  inp.onkeydown = ev => {
+    if (ev.key === 'Enter') inp.blur();
+    if (ev.key === 'Escape') done(false);
+  };
+  inp.focus();
+  inp.select();
+}
+document.addEventListener('click', ev => {
+  const span = ev.target.closest('.stepper .val');
+  if (span && span.tagName === 'SPAN') editVal(span);
+});
 
 function badge(label, on, cls) {
   return `<span class="badge ${on ? 'on ' + (cls || '') : ''}"><span class="dot"></span>${label}</span>`;
