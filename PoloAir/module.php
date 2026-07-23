@@ -329,6 +329,22 @@ class PoloAir extends IPSModule
         return true;
     }
 
+    /**
+     * Entfernt einen Wert wieder aus der Verfügbar-Liste (z. B. wenn das Gerät
+     * einen "kein Fühler"-Marker liefert) und setzt die Variable auf 0.
+     */
+    private function dropAvail(string $ident): void
+    {
+        $avail = json_decode($this->ReadAttributeString('AvailIdents'), true);
+        if (is_array($avail) && in_array($ident, $avail, true)) {
+            $this->WriteAttributeString('AvailIdents', json_encode(array_values(array_diff($avail, [$ident]))));
+        }
+        $vid = @$this->GetIDForIdent($ident);
+        if ($vid !== false && $vid > 0 && GetValue($vid) != 0) {
+            SetValue($vid, 0);
+        }
+    }
+
     private function persistAvail(): void
     {
         $avail = json_decode($this->ReadAttributeString('AvailIdents'), true);
@@ -677,7 +693,7 @@ class PoloAir extends IPSModule
             $payload = json_decode(file_get_contents('php://input'), true);
             $ident = (string) ($payload['ident'] ?? '');
             $cmd = (string) ($payload['cmd'] ?? '');
-            if ($cmd !== 'resetAlarms' && !isset($this->writeMap()[$ident])) {
+            if (!in_array($cmd, ['resetAlarms', 'setScheduleDay'], true) && !isset($this->writeMap()[$ident])) {
                 http_response_code(400);
                 echo json_encode(['ok' => false, 'error' => 'invalid ident']);
                 return;
@@ -695,6 +711,14 @@ class PoloAir extends IPSModule
                     if (!$this->ResetAlarms()) {
                         throw new Exception('Alarm-Reset fehlgeschlagen');
                     }
+                } elseif ($cmd === 'setScheduleDay') {
+                    $ok = $this->SetScheduleDay(
+                        (int) ($payload['day'] ?? -1),
+                        json_encode($payload['events'] ?? [])
+                    );
+                    if (!$ok) {
+                        throw new Exception('Zeitprogramm-Schreiben fehlgeschlagen');
+                    }
                 } else {
                     IPS_RequestAction($this->InstanceID, $ident, $payload['value'] ?? null);
                 }
@@ -711,6 +735,12 @@ class PoloAir extends IPSModule
         if (isset($_GET['data'])) {
             header('Content-Type: application/json; charset=utf-8');
             echo json_encode($this->collectData());
+            return;
+        }
+
+        if (isset($_GET['schedule'])) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo $this->GetSchedule();
             return;
         }
 
@@ -1126,9 +1156,16 @@ class PoloAir extends IPSModule
             if ($g(1202) !== null) {
                 $this->SetValueSafe('TempKorrektur', $this->s16((int) $g(1202)) / 10);
             }
-            // Wassertemperatur nur bei Geräten mit Wasserregister sinnvoll
-            if ($g(1205) !== null && (int) $g(1205) !== 0) {
-                $this->SetValueSafe('WasserTemp', $this->s16((int) $g(1205)) / 10);
+            // Wassertemperatur nur bei Geräten mit Wasserregister sinnvoll;
+            // 0 und 0x7FFF (32767 = "kein Fühler") ausblenden
+            $wraw = $g(1205);
+            if ($wraw !== null) {
+                $ws = $this->s16((int) $wraw);
+                if ((int) $wraw !== 0 && (int) $wraw !== 0x7FFF && $ws > -500 && $ws < 1200) {
+                    $this->SetValueSafe('WasserTemp', $ws / 10);
+                } else {
+                    $this->dropAvail('WasserTemp');
+                }
             }
         }
 
@@ -1774,6 +1811,118 @@ class PoloAir extends IPSModule
                 fclose($sock);
             }
             return $out;
+        } finally {
+            IPS_SemaphoreLeave($this->semName());
+        }
+    }
+
+    // =====================================================================
+    // Zeitprogramm (C4): 7 Tage × 3 Events (Start/Stopp/Stufe), Reg. 1300–1362
+    // =====================================================================
+
+    /**
+     * Liest das C4-Wochenprogramm.
+     * Rückgabe: JSON {ok, days[7][3]} mit start/stop in Minuten seit 0:00 und level 0–3.
+     */
+    public function GetSchedule(): string
+    {
+        $days = $this->readSchedule();
+        return json_encode($days === null ? ['ok' => false] : ['ok' => true, 'days' => $days]);
+    }
+
+    private function readSchedule(): ?array
+    {
+        if ($this->ctrl() !== self::CTRL_C4) {
+            return null;
+        }
+        if (!IPS_SemaphoreEnter($this->semName(), 5000)) {
+            return null;
+        }
+        try {
+            $sock = $this->mbConnect();
+            if ($sock === false) {
+                return null;
+            }
+            try {
+                $off = $this->detectDevice($sock);
+                $b = $this->mbRead($sock, 1300 + $off, 63);
+                if ($b === null || count($b) < 63) {
+                    return null;
+                }
+                $days = [];
+                for ($d = 0; $d < 7; $d++) {
+                    $events = [];
+                    for ($e = 0; $e < 3; $e++) {
+                        $start = (int) $b[$d * 6 + $e * 2];
+                        $stop = (int) $b[$d * 6 + $e * 2 + 1];
+                        $events[] = [
+                            'start' => (($start >> 8) & 0xFF) * 60 + ($start & 0xFF),
+                            'stop'  => (($stop >> 8) & 0xFF) * 60 + ($stop & 0xFF),
+                            'level' => (int) $b[42 + $d * 3 + $e]
+                        ];
+                    }
+                    $days[] = $events;
+                }
+                return $days;
+            } finally {
+                fclose($sock);
+            }
+        } finally {
+            IPS_SemaphoreLeave($this->semName());
+        }
+    }
+
+    /**
+     * Schreibt einen Wochentag des C4-Zeitprogramms (alle 3 Events).
+     *
+     * @param int    $Day        0 = Montag … 6 = Sonntag
+     * @param string $EventsJSON JSON-Array mit 3 Objekten {start, stop, level},
+     *                           Zeiten in Minuten seit 0:00 (0–1440), Stufe 0–3
+     */
+    public function SetScheduleDay(int $Day, string $EventsJSON): bool
+    {
+        if ($this->ctrl() !== self::CTRL_C4) {
+            $this->LogMessage('Das Zeitprogramm ist nur für die C4-Steuerung implementiert.', KL_WARNING);
+            return false;
+        }
+        if (!$this->ReadPropertyBoolean('EnableWrite')) {
+            $this->LogMessage('Schreibzugriff ist in der Instanzkonfiguration deaktiviert.', KL_WARNING);
+            return false;
+        }
+        if ($Day < 0 || $Day > 6) {
+            throw new Exception('Ungültiger Wochentag (0 = Montag … 6 = Sonntag).');
+        }
+        $events = json_decode($EventsJSON, true);
+        if (!is_array($events) || count($events) !== 3) {
+            throw new Exception('Es müssen genau 3 Events übergeben werden.');
+        }
+
+        $times = [];
+        $levels = [];
+        foreach ($events as $ev) {
+            $start = max(0, min(1440, (int) ($ev['start'] ?? 0)));
+            $stop = max(0, min(1440, (int) ($ev['stop'] ?? 0)));
+            $times[] = (intdiv($start, 60) << 8) | ($start % 60);
+            $times[] = (intdiv($stop, 60) << 8) | ($stop % 60);
+            $levels[] = max(0, min(3, (int) ($ev['level'] ?? 0)));
+        }
+
+        if (!IPS_SemaphoreEnter($this->semName(), 5000)) {
+            throw new Exception('Modbus-Zugriff belegt, bitte erneut versuchen.');
+        }
+        try {
+            $sock = $this->mbConnect();
+            if ($sock === false) {
+                $this->SetStatus(201);
+                throw new Exception('Keine Verbindung zum Lüftungsgerät.');
+            }
+            try {
+                $off = $this->detectDevice($sock);
+                return $this->mbWriteMultiple($sock, 1300 + $Day * 6 + $off, $times)
+                    && $this->mbWriteMultiple($sock, 1342 + $Day * 3 + $off, $levels);
+            } finally {
+                fclose($sock);
+            }
         } finally {
             IPS_SemaphoreLeave($this->semName());
         }

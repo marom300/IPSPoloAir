@@ -51,7 +51,9 @@ Wärmetauscher-/Heizer-/Wasserheizung-/Wasserkühlung-Leistung (%),
 Warnungen und Stopp-Codes im Klartext, OVR-Status.
 
 **Schreiben:** Ein/Aus, Stufe 1–3, AUTO-Modus, Saison, Temperatur-Sollwert und
--Korrektur, Zuluft-/Abluft-Intensität je Stufe (1–4), OVR aktivieren + Laufzeit.
+-Korrektur, Zuluft-/Abluft-Intensität je Stufe (1–4), OVR aktivieren + Laufzeit,
+**Wochenprogramm** (7 Tage × 3 Zeitfenster mit Start/Stopp/Stufe – im Dashboard
+per Tages-Editor konfigurierbar, inkl. „Für alle Tage übernehmen").
 
 *Nicht verfügbar bei C4:* Außen-/Abluft-Temperatur, Luftmengen in m³/h,
 Filter-Verschmutzung, Energiedaten, Luftqualitäts-Regelung, Alarm-Quittierung
@@ -120,6 +122,8 @@ Aufruf: `http://<Symcon-IP>:3777/hook/poloair`
 | `PAIR_ResetAlarms(int $id)` | Alle aktiven Alarme quittieren. |
 | `PAIR_DumpRegisters(int $id)` | Alle Registerblöcke als Rohwerte ausgeben (Diagnose). |
 | `PAIR_ScanRegisters(int $id)` | Sucht rein lesend nach Registern, die über die Dokumentation hinaus existieren (z. B. zusätzliche Temperaturfühler). Dauert ~1 Minute. |
+| `PAIR_GetSchedule(int $id)` | C4: Wochenprogramm als JSON lesen (`days[7][3]` mit `start`/`stop` in Minuten seit 0:00 und `level` 0–3). |
+| `PAIR_SetScheduleDay(int $id, int $Day, string $EventsJSON)` | C4: Einen Wochentag schreiben (0 = Mo … 6 = So), z. B. `PAIR_SetScheduleDay($id, 0, '[{"start":360,"stop":1320,"level":2},{"start":0,"stop":0,"level":0},{"start":0,"stop":0,"level":0}]');` |
 | `IPS_RequestAction($id, 'Modus', 2)` | Beispiel: Modus auf „Normal“ schalten (1=Abwesend, 2=Normal, 3=Intensiv, 4=Boost). |
 
 ## Technische Details

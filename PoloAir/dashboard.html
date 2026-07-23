@@ -94,6 +94,18 @@ body.bypass .bypass{opacity:1}
 body.c4 .c6only{display:none!important}
 body:not(.c4) .c4only{display:none!important}
 .filt-idle{fill:var(--pipe-idle)}
+
+/* Zeitprogramm */
+.wide{grid-column:1/-1}
+.schedgrid{display:flex;flex-direction:column;gap:4px}
+.schedrow{display:flex;align-items:center;gap:8px;background:var(--card2);border:1px solid var(--line);
+  border-radius:9px;padding:6px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.schedrow:hover{border-color:#3a4a5c}
+.schedday{width:32px;font-weight:600;font-size:13px;flex:none}
+.schedev{flex:1;font-size:12px;color:var(--dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+.schedev b{color:var(--txt);font-weight:600}
+.schedlvl{color:var(--ok)}
+@media (max-width:820px){.schedev{white-space:normal}}
 .heater{opacity:.15;transition:opacity .5s}
 body.heat-on .heater{opacity:1}
 .filt-ok{fill:var(--ok)} .filt-warn{fill:var(--warn)} .filt-bad{fill:var(--err)}
@@ -365,6 +377,15 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
 <div id="pageDetails" style="display:none">
 <section class="tiles tiles-lg">
 
+  <div class="tile c4only wide" id="tileZeit">
+    <h3><span class="ico">📅</span>Zeitprogramm (AUTO-Modus)</h3>
+    <div class="schedgrid" id="schedGrid">–</div>
+    <div class="row2">
+      <div class="sub" style="flex:1">Im AUTO-Modus fährt das Gerät diese Zeitfenster; außerhalb der Fenster steht es auf Standby. Zum Bearbeiten auf einen Tag tippen.</div>
+      <button class="toggle" style="flex:none" onclick="loadSchedule(true)">Neu laden</button>
+    </div>
+  </div>
+
   <div class="tile c4only" id="tileStufenZu">
     <h3><span class="ico">➡️</span>Zuluft-Intensität je Stufe</h3>
     <div class="row2"><span class="sub">Stufe 1</span>
@@ -542,6 +563,19 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
   </div>
 </div>
 
+<!-- Zeitprogramm-Editor -->
+<div class="overlay" id="schedOverlay">
+  <div class="pinbox" style="width:min(440px,94vw);max-height:92dvh;overflow-y:auto">
+    <div class="pintitle" id="schedTitle">Zeitprogramm</div>
+    <div id="schedEvents" style="display:flex;flex-direction:column;gap:8px"></div>
+    <div class="row2">
+      <button class="toggle" onclick="saveSchedule(false)">Speichern</button>
+      <button class="toggle" onclick="saveSchedule(true)">Für alle Tage</button>
+      <button class="toggle" onclick="closeSched()">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script>
@@ -651,8 +685,103 @@ function switchPage(p) {
   $('navAnlage').classList.toggle('active', p !== 'details');
   $('navDetails').classList.toggle('active', p === 'details');
   localStorage.setItem('pair_page', p);
+  if (p === 'details') loadSchedule(false);
 }
 switchPage(localStorage.getItem('pair_page') || 'anlage');
+
+// ---------- Zeitprogramm (C4) ----------
+const DAY_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+const DAY_LONG = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+let SCHED = null, schedDay = 0, schedEdit = null, schedLoading = false;
+
+function fmtTime(min) {
+  return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0');
+}
+
+async function loadSchedule(force) {
+  if (D.ctrl !== 'C4' || schedLoading || (SCHED && !force)) return;
+  schedLoading = true;
+  $('schedGrid').textContent = 'Zeitprogramm wird gelesen …';
+  try {
+    const r = await fetch('?schedule=1', {cache: 'no-store'});
+    const j = await r.json();
+    if (!j.ok) throw new Error('Gerät antwortet nicht');
+    SCHED = j.days;
+    renderSchedule();
+  } catch (e) {
+    $('schedGrid').textContent = 'Zeitprogramm konnte nicht gelesen werden – bitte „Neu laden“.';
+  }
+  schedLoading = false;
+}
+
+function renderSchedule() {
+  if (!SCHED) return;
+  let h = '';
+  for (let d = 0; d < 7; d++) {
+    let evs = '';
+    for (const ev of SCHED[d]) {
+      if (ev.start === ev.stop) {
+        evs += '<span class="schedev">–</span>';
+        continue;
+      }
+      const lvl = ev.level === 0 ? 'Standby' : 'Stufe ' + ev.level;
+      evs += `<span class="schedev"><b>${fmtTime(ev.start)}–${fmtTime(ev.stop)}</b> <span class="schedlvl">${lvl}</span></span>`;
+    }
+    h += `<div class="schedrow" onclick="openSched(${d})"><span class="schedday">${DAY_SHORT[d]}</span>${evs}</div>`;
+  }
+  $('schedGrid').innerHTML = h;
+}
+
+function openSched(d) {
+  if (!D.writeEnabled || !SCHED) return;
+  schedDay = d;
+  schedEdit = JSON.parse(JSON.stringify(SCHED[d]));
+  $('schedTitle').textContent = 'Zeitprogramm ' + DAY_LONG[d];
+  renderSchedEditor();
+  $('schedOverlay').classList.add('show');
+}
+
+function renderSchedEditor() {
+  let h = '';
+  for (let e = 0; e < 3; e++) {
+    const ev = schedEdit[e];
+    const lvlBtns = [['Standby', 0], ['Stufe 1', 1], ['Stufe 2', 2], ['Stufe 3', 3]]
+      .map(([t, v]) => `<button class="${ev.level === v ? 'active' : ''}" onclick="schedLvl(${e},${v})">${t}</button>`)
+      .join('');
+    h += `${e > 0 ? '<div class="sep"></div>' : ''}
+      <div class="sub">Zeitfenster ${e + 1}${ev.start === ev.stop ? ' (inaktiv – Start gleich Stopp)' : ''}</div>
+      <div class="row2"><div class="nav">${lvlBtns}</div></div>
+      <div class="row2"><span class="sub">Start</span>
+        <div class="stepper"><button onclick="schedTime(${e},'start',-15)">−</button><span class="val">${fmtTime(ev.start)}</span><button onclick="schedTime(${e},'start',15)">+</button></div></div>
+      <div class="row2"><span class="sub">Stopp</span>
+        <div class="stepper"><button onclick="schedTime(${e},'stop',-15)">−</button><span class="val">${fmtTime(ev.stop)}</span><button onclick="schedTime(${e},'stop',15)">+</button></div></div>`;
+  }
+  $('schedEvents').innerHTML = h;
+}
+
+function schedLvl(e, v) { schedEdit[e].level = v; renderSchedEditor(); }
+function schedTime(e, k, delta) {
+  schedEdit[e][k] = Math.max(0, Math.min(1440, schedEdit[e][k] + delta));
+  renderSchedEditor();
+}
+function closeSched() { $('schedOverlay').classList.remove('show'); }
+
+async function saveSchedule(all) {
+  closeSched();
+  const days = all ? [0, 1, 2, 3, 4, 5, 6] : [schedDay];
+  try {
+    for (const d of days) {
+      const ok = await sendPost({cmd: 'setScheduleDay', day: d, events: schedEdit});
+      if (ok === null) return;               // PIN-Dialog abgebrochen
+      if (ok === false) { load(); return; }  // falsche PIN
+      SCHED[d] = JSON.parse(JSON.stringify(schedEdit));
+    }
+    toast('✓ Zeitprogramm gespeichert', 'ok');
+    renderSchedule();
+  } catch (e) {
+    toast('Zeitprogramm speichern fehlgeschlagen (' + e.message + ')');
+  }
+}
 
 // ---------- Stepper: lokal zählen, nach kurzer Pause senden ----------
 const stepTimers = {};
@@ -891,6 +1020,9 @@ function render() {
   $('tileAQ').style.display = (c4 || D.aq === false) ? 'none' : '';
   $('tileStufenZu').style.display = (c4 && D.modeset !== false) ? '' : 'none';
   $('tileStufenAb').style.display = (c4 && D.modeset !== false) ? '' : 'none';
+
+  // Zeitprogramm nachladen, sobald Steuerung bekannt und Details sichtbar
+  if (c4 && !SCHED && $('pageDetails').style.display !== 'none') loadSchedule(false);
 
   $('footinfo').textContent = 'Poloplast POLO-AIR · Modbus TCP'
     + (D.ctrl && D.ctrl !== '?' ? ' · Steuerung ' + (c4 ? 'C4 (PING2)' : 'C6') : '')
