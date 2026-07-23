@@ -124,6 +124,18 @@ Aufruf: `http://<Symcon-IP>:3777/hook/poloair`
 | `PAIR_ScanRegisters(int $id)` | Sucht rein lesend nach Registern, die über die Dokumentation hinaus existieren (z. B. zusätzliche Temperaturfühler). Dauert ~1 Minute. |
 | `PAIR_GetSchedule(int $id)` | C4: Wochenprogramm als JSON lesen (`days[7][3]` mit `start`/`stop` in Minuten seit 0:00 und `level` 0–3). |
 | `PAIR_SetScheduleDay(int $id, int $Day, string $EventsJSON)` | C4: Einen Wochentag schreiben (0 = Mo … 6 = So), z. B. `PAIR_SetScheduleDay($id, 0, '[{"start":360,"stop":1320,"level":2},{"start":0,"stop":0,"level":0},{"start":0,"stop":0,"level":0}]');` |
+| `PAIR_CreateWeekplan(int $id)` | Legt einen **IPS-Wochenplan** unter der Instanz an, der die Stufe schaltet (Aktionen: Aus, Stufe 1–3). Flexibler als das Geräte-Zeitprogramm: beliebig viele Schaltpunkte, Zeiten über Mitternacht, grafische Bearbeitung. Gerät dabei auf Manuell lassen (AUTO aus). |
+| `PAIR_ScheduleAction(int $id, int $Level)` | Schaltziel des Wochenplans: 0 = Gerät aus, 1–3 = Stufe (schaltet bei Bedarf ein und von AUTO auf Manuell). Auch für eigene Skripte/Automationen nutzbar. |
+
+### Geräte-Zeitprogramm vs. Symcon-Wochenplan
+
+Das interne C4-Zeitprogramm kann nur **3 Fenster pro Tag**, keine Fenster über
+Mitternacht, und außerhalb der Fenster steht das Gerät auf Standby. Für Profile
+wie „nachts Stufe 1, tagsüber Stufe 2, morgens/abends stoßlüften" reicht das
+nicht. Dafür gibt es `PAIR_CreateWeekplan`: Symcon schaltet die Stufe über einen
+normalen IPS-Wochenplan (beliebig viele Schaltpunkte, Drag-&-Drop-Editor, auch
+im WebFront/in der Kachel-Visualisierung bedienbar). Das Gerät bleibt dabei im
+Manuell-Modus; das interne Zeitprogramm und der AUTO-Modus werden nicht genutzt.
 | `IPS_RequestAction($id, 'Modus', 2)` | Beispiel: Modus auf „Normal“ schalten (1=Abwesend, 2=Normal, 3=Intensiv, 4=Boost). |
 
 ## Technische Details

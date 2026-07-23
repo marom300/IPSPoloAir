@@ -1817,6 +1817,72 @@ class PoloAir extends IPSModule
     }
 
     // =====================================================================
+    // Symcon-Wochenplan (flexibler als das 3-Fenster-Zeitprogramm der C4)
+    // =====================================================================
+
+    /**
+     * Schaltziel für den Symcon-Wochenplan.
+     *  0 = Gerät aus, 1–3 = Stufe (C4) bzw. Modus (C6: 1 Abwesend, 2 Normal, 3 Intensiv).
+     * Schaltet das Gerät bei Bedarf ein und (bei C4) von AUTO auf Manuell.
+     */
+    public function ScheduleAction(int $Level): void
+    {
+        if ($Level <= 0) {
+            $this->RequestAction('Power', false);
+            return;
+        }
+        $vid = @$this->GetIDForIdent('Power');
+        if ($vid !== false && $vid > 0 && !GetValue($vid)) {
+            $this->RequestAction('Power', true);
+        }
+        $this->RequestAction($this->ctrl() === self::CTRL_C4 ? 'Stufe' : 'Modus', min(3, $Level));
+    }
+
+    /**
+     * Legt unter der Instanz einen IPS-Wochenplan an, der die Lüftungsstufe
+     * schaltet. Vorteil gegenüber dem Geräte-Zeitprogramm: beliebig viele
+     * Schaltpunkte, Zeiten über Mitternacht, grafisch bearbeitbar.
+     * Vorbelegung: 22:00–06:00 Stufe 1, 06:00–06:30 und 20:00–20:30 Stufe 3
+     * (Stoßlüften), sonst Stufe 2. Ein vorhandener Plan bleibt unangetastet.
+     */
+    public function CreateWeekplan(): string
+    {
+        $eid = @IPS_GetObjectIDByIdent('Wochenplan', $this->InstanceID);
+        if ($eid !== false && $eid > 0) {
+            return 'Der Wochenplan existiert bereits (Objekt #' . $eid . ') – Zeiten dort direkt bearbeiten.';
+        }
+
+        $eid = IPS_CreateEvent(2 /* Wochenplan */);
+        IPS_SetParent($eid, $this->InstanceID);
+        IPS_SetIdent($eid, 'Wochenplan');
+        IPS_SetName($eid, 'Wochenplan Lüftung');
+        IPS_SetPosition($eid, 5);
+
+        IPS_SetEventScheduleAction($eid, 0, 'Aus', 0x808080, "PAIR_ScheduleAction({$this->InstanceID}, 0);");
+        IPS_SetEventScheduleAction($eid, 1, 'Stufe 1 (Nacht)', 0x3D9EE8, "PAIR_ScheduleAction({$this->InstanceID}, 1);");
+        IPS_SetEventScheduleAction($eid, 2, 'Stufe 2', 0x00A65E, "PAIR_ScheduleAction({$this->InstanceID}, 2);");
+        IPS_SetEventScheduleAction($eid, 3, 'Stufe 3 (Lüften)', 0xE8A33D, "PAIR_ScheduleAction({$this->InstanceID}, 3);");
+
+        // Eine Gruppe für alle Tage (Mo–So = Bitmaske 127)
+        IPS_SetEventScheduleGroup($eid, 0, 127);
+        IPS_SetEventScheduleGroupPoint($eid, 0, 0, 0, 0, 0, 1);   // 00:00 Stufe 1
+        IPS_SetEventScheduleGroupPoint($eid, 0, 1, 6, 0, 0, 3);   // 06:00 Lüften
+        IPS_SetEventScheduleGroupPoint($eid, 0, 2, 6, 30, 0, 2);  // 06:30 Stufe 2
+        IPS_SetEventScheduleGroupPoint($eid, 0, 3, 20, 0, 0, 3);  // 20:00 Lüften
+        IPS_SetEventScheduleGroupPoint($eid, 0, 4, 20, 30, 0, 2); // 20:30 Stufe 2
+        IPS_SetEventScheduleGroupPoint($eid, 0, 5, 22, 0, 0, 1);  // 22:00 Stufe 1
+
+        IPS_SetEventActive($eid, true);
+
+        return "Wochenplan angelegt (Objekt #{$eid}).\n" .
+            "Vorbelegung: 22:00–06:00 Stufe 1 · 06:00–06:30 Lüften (Stufe 3) · " .
+            "06:30–20:00 Stufe 2 · 20:00–20:30 Lüften · 20:30–22:00 Stufe 2.\n" .
+            "Zeiten per Drag & Drop im Wochenplan-Editor anpassen.\n" .
+            "WICHTIG: Den AUTO-Modus des Geräts ausschalten, damit sich das " .
+            "interne Zeitprogramm und der Symcon-Plan nicht in die Quere kommen.";
+    }
+
+    // =====================================================================
     // Zeitprogramm (C4): 7 Tage × 3 Events (Start/Stopp/Stufe), Reg. 1300–1362
     // =====================================================================
 

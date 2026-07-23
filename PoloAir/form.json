@@ -119,6 +119,11 @@
             "onClick": "echo PAIR_ScanRegisters($id);"
         },
         {
+            "type": "Button",
+            "caption": "Symcon-Wochenplan anlegen (flexibler als das Geräte-Zeitprogramm)",
+            "onClick": "echo PAIR_CreateWeekplan($id);"
+        },
+        {
             "type": "Label",
             "caption": "Dashboard: http://<Symcon-IP>:3777/hook/poloair"
         },
