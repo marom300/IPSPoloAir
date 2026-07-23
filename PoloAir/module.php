@@ -693,7 +693,7 @@ class PoloAir extends IPSModule
             $payload = json_decode(file_get_contents('php://input'), true);
             $ident = (string) ($payload['ident'] ?? '');
             $cmd = (string) ($payload['cmd'] ?? '');
-            if (!in_array($cmd, ['resetAlarms', 'setScheduleDay'], true) && !isset($this->writeMap()[$ident])) {
+            if (!in_array($cmd, ['resetAlarms', 'setScheduleDay', 'setWeekplan', 'createWeekplan'], true) && !isset($this->writeMap()[$ident])) {
                 http_response_code(400);
                 echo json_encode(['ok' => false, 'error' => 'invalid ident']);
                 return;
@@ -719,6 +719,12 @@ class PoloAir extends IPSModule
                     if (!$ok) {
                         throw new Exception('Zeitprogramm-Schreiben fehlgeschlagen');
                     }
+                } elseif ($cmd === 'setWeekplan') {
+                    if (!$this->SetWeekplan(json_encode(['groups' => $payload['groups'] ?? []]))) {
+                        throw new Exception('Wochenplan-Schreiben fehlgeschlagen');
+                    }
+                } elseif ($cmd === 'createWeekplan') {
+                    $this->CreateWeekplan();
                 } else {
                     IPS_RequestAction($this->InstanceID, $ident, $payload['value'] ?? null);
                 }
@@ -741,6 +747,12 @@ class PoloAir extends IPSModule
         if (isset($_GET['schedule'])) {
             header('Content-Type: application/json; charset=utf-8');
             echo $this->GetSchedule();
+            return;
+        }
+
+        if (isset($_GET['weekplan'])) {
+            header('Content-Type: application/json; charset=utf-8');
+            echo $this->GetWeekplan();
             return;
         }
 
@@ -1852,6 +1864,103 @@ class PoloAir extends IPSModule
             return 'Der Wochenplan existiert bereits (Objekt #' . $eid . ') – Zeiten dort direkt bearbeiten.';
         }
 
+        // Eine Gruppe für alle Tage (Mo–So = Bitmaske 127)
+        $eid = $this->buildWeekplanEvent([
+            ['days' => 127, 'points' => [0 => 1, 360 => 3, 390 => 2, 1200 => 3, 1230 => 2, 1320 => 1]]
+        ]);
+
+        return "Wochenplan angelegt (Objekt #{$eid}).\n" .
+            "Vorbelegung: 22:00–06:00 Stufe 1 · 06:00–06:30 Lüften (Stufe 3) · " .
+            "06:30–20:00 Stufe 2 · 20:00–20:30 Lüften · 20:30–22:00 Stufe 2.\n" .
+            "Bearbeiten: im Dashboard (Details -> Wochenplan) oder im Wochenplan-Editor der Konsole.\n" .
+            "WICHTIG: Den AUTO-Modus des Geräts ausschalten, damit sich das " .
+            "interne Zeitprogramm und der Symcon-Plan nicht in die Quere kommen.";
+    }
+
+    /**
+     * Liest den Symcon-Wochenplan.
+     * Rückgabe: JSON {ok, exists, groups[]} mit days (Bitmaske Mo=1…So=64)
+     * und points[] = {minute, action} (Minuten seit 0:00, Aktion 0–3).
+     */
+    public function GetWeekplan(): string
+    {
+        $eid = @IPS_GetObjectIDByIdent('Wochenplan', $this->InstanceID);
+        if ($eid === false || $eid <= 0) {
+            return json_encode(['ok' => true, 'exists' => false]);
+        }
+        $ev = IPS_GetEvent($eid);
+        $groups = [];
+        foreach ($ev['ScheduleGroups'] as $g) {
+            $points = [];
+            foreach ($g['Points'] as $p) {
+                $points[] = [
+                    'minute' => (int) $p['Start']['Hour'] * 60 + (int) $p['Start']['Minute'],
+                    'action' => (int) $p['ActionID']
+                ];
+            }
+            usort($points, fn ($a, $b) => $a['minute'] <=> $b['minute']);
+            $groups[] = ['days' => (int) $g['Days'], 'points' => $points];
+        }
+        return json_encode(['ok' => true, 'exists' => true, 'active' => (bool) $ev['EventActive'], 'groups' => $groups]);
+    }
+
+    /**
+     * Schreibt den kompletten Symcon-Wochenplan neu.
+     * $PlanJSON: {groups: [{days: Bitmaske, points: [{minute, action}]}]}.
+     * Das Ereignis wird neu aufgebaut, weil die IPS-API einzelne Schaltpunkte
+     * nicht löschen kann.
+     */
+    public function SetWeekplan(string $PlanJSON): bool
+    {
+        if (!$this->ReadPropertyBoolean('EnableWrite')) {
+            $this->LogMessage('Schreibzugriff ist in der Instanzkonfiguration deaktiviert.', KL_WARNING);
+            return false;
+        }
+        $plan = json_decode($PlanJSON, true);
+        $groups = is_array($plan) ? ($plan['groups'] ?? null) : null;
+        if (!is_array($groups)) {
+            throw new Exception('Ungültiges Wochenplan-Format.');
+        }
+
+        $usedDays = 0;
+        $clean = [];
+        foreach ($groups as $g) {
+            $days = ((int) ($g['days'] ?? 0)) & 127;
+            $points = $g['points'] ?? [];
+            if ($days === 0 || !is_array($points) || count($points) === 0) {
+                continue;
+            }
+            if ($usedDays & $days) {
+                throw new Exception('Ein Wochentag ist mehreren Gruppen zugeordnet.');
+            }
+            $usedDays |= $days;
+            $pts = [];
+            foreach ($points as $p) {
+                $minute = max(0, min(1439, (int) ($p['minute'] ?? 0)));
+                $pts[$minute] = max(0, min(3, (int) ($p['action'] ?? 0)));
+            }
+            ksort($pts);
+            $clean[] = ['days' => $days, 'points' => $pts];
+        }
+        if (count($clean) === 0) {
+            throw new Exception('Der Plan braucht mindestens eine Gruppe mit Schaltpunkten.');
+        }
+
+        $old = @IPS_GetObjectIDByIdent('Wochenplan', $this->InstanceID);
+        if ($old !== false && $old > 0) {
+            IPS_DeleteEvent($old);
+        }
+        $this->buildWeekplanEvent($clean);
+        return true;
+    }
+
+    /**
+     * Baut das Wochenplan-Ereignis mit den Standard-Aktionen auf.
+     *
+     * @param array $groups [['days' => Bitmaske, 'points' => [Minute => Aktion]], …]
+     */
+    private function buildWeekplanEvent(array $groups): int
+    {
         $eid = IPS_CreateEvent(2 /* Wochenplan */);
         IPS_SetParent($eid, $this->InstanceID);
         IPS_SetIdent($eid, 'Wochenplan');
@@ -1863,23 +1972,16 @@ class PoloAir extends IPSModule
         IPS_SetEventScheduleAction($eid, 2, 'Stufe 2', 0x00A65E, "PAIR_ScheduleAction({$this->InstanceID}, 2);");
         IPS_SetEventScheduleAction($eid, 3, 'Stufe 3 (Lüften)', 0xE8A33D, "PAIR_ScheduleAction({$this->InstanceID}, 3);");
 
-        // Eine Gruppe für alle Tage (Mo–So = Bitmaske 127)
-        IPS_SetEventScheduleGroup($eid, 0, 127);
-        IPS_SetEventScheduleGroupPoint($eid, 0, 0, 0, 0, 0, 1);   // 00:00 Stufe 1
-        IPS_SetEventScheduleGroupPoint($eid, 0, 1, 6, 0, 0, 3);   // 06:00 Lüften
-        IPS_SetEventScheduleGroupPoint($eid, 0, 2, 6, 30, 0, 2);  // 06:30 Stufe 2
-        IPS_SetEventScheduleGroupPoint($eid, 0, 3, 20, 0, 0, 3);  // 20:00 Lüften
-        IPS_SetEventScheduleGroupPoint($eid, 0, 4, 20, 30, 0, 2); // 20:30 Stufe 2
-        IPS_SetEventScheduleGroupPoint($eid, 0, 5, 22, 0, 0, 1);  // 22:00 Stufe 1
+        foreach ($groups as $gi => $g) {
+            IPS_SetEventScheduleGroup($eid, $gi, $g['days']);
+            $pi = 0;
+            foreach ($g['points'] as $minute => $action) {
+                IPS_SetEventScheduleGroupPoint($eid, $gi, $pi++, intdiv($minute, 60), $minute % 60, 0, $action);
+            }
+        }
 
         IPS_SetEventActive($eid, true);
-
-        return "Wochenplan angelegt (Objekt #{$eid}).\n" .
-            "Vorbelegung: 22:00–06:00 Stufe 1 · 06:00–06:30 Lüften (Stufe 3) · " .
-            "06:30–20:00 Stufe 2 · 20:00–20:30 Lüften · 20:30–22:00 Stufe 2.\n" .
-            "Zeiten per Drag & Drop im Wochenplan-Editor anpassen.\n" .
-            "WICHTIG: Den AUTO-Modus des Geräts ausschalten, damit sich das " .
-            "interne Zeitprogramm und der Symcon-Plan nicht in die Quere kommen.";
+        return $eid;
     }
 
     // =====================================================================

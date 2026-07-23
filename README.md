@@ -136,6 +136,12 @@ nicht. Dafür gibt es `PAIR_CreateWeekplan`: Symcon schaltet die Stufe über ein
 normalen IPS-Wochenplan (beliebig viele Schaltpunkte, Drag-&-Drop-Editor, auch
 im WebFront/in der Kachel-Visualisierung bedienbar). Das Gerät bleibt dabei im
 Manuell-Modus; das interne Zeitprogramm und der AUTO-Modus werden nicht genutzt.
+
+Der Wochenplan ist auch **direkt im Dashboard** bedienbar (Details →
+„Wochenplan (Symcon)"): farbiger 24-h-Zeitstrahl je Tagesgruppe, Bearbeiten per
+Antippen (Schaltpunkte hinzufügen/löschen, Uhrzeiten tippbar, Tage je Gruppe
+wählbar, z. B. Mo–Fr und Sa–So getrennt). Änderungen sind PIN-geschützt, falls
+eine PIN gesetzt ist.
 | `IPS_RequestAction($id, 'Modus', 2)` | Beispiel: Modus auf „Normal“ schalten (1=Abwesend, 2=Normal, 3=Intensiv, 4=Boost). |
 
 ## Technische Details

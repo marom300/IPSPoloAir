@@ -106,6 +106,24 @@ body:not(.c4) .c4only{display:none!important}
 .schedev b{color:var(--txt);font-weight:600}
 .schedlvl{color:var(--ok)}
 @media (max-width:820px){.schedev{white-space:normal}}
+
+/* Symcon-Wochenplan */
+.wpbar{position:relative;height:16px;border-radius:8px;overflow:hidden;background:var(--card2);
+  border:1px solid var(--line);flex:1;min-width:120px}
+.wpseg{position:absolute;top:0;bottom:0}
+.wpdayslbl{width:74px;font-weight:600;font-size:12px;flex:none}
+.wplegend{display:flex;gap:12px;flex-wrap:wrap;font-size:11px;color:var(--dim)}
+.wplegend i{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}
+.wppt{display:flex;align-items:center;gap:6px}
+.wpdaychips{display:flex;gap:4px;flex-wrap:wrap;justify-content:center}
+.wpdaychips button{background:var(--card2);border:1px solid var(--line);border-radius:8px;color:var(--dim);
+  padding:4px 9px;font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.wpdaychips button.on{color:var(--txt);border-color:rgba(61,220,132,.5);background:rgba(61,220,132,.08)}
+.wpdel{background:none;border:1px solid var(--line);border-radius:8px;color:var(--err);width:28px;height:28px;
+  cursor:pointer;flex:none;font-size:14px}
+.wptime{background:var(--card2);border:1px solid var(--line);border-radius:8px;color:var(--txt);width:62px;
+  text-align:center;font-family:inherit;font-size:13px;font-weight:600;padding:5px 2px;outline:none;
+  font-variant-numeric:tabular-nums}
 .heater{opacity:.15;transition:opacity .5s}
 body.heat-on .heater{opacity:1}
 .filt-ok{fill:var(--ok)} .filt-warn{fill:var(--warn)} .filt-bad{fill:var(--err)}
@@ -381,6 +399,17 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
 <div id="pageDetails" style="display:none">
 <section class="tiles tiles-lg">
 
+  <div class="tile wide" id="tileWochenplan">
+    <h3><span class="ico">🗓️</span>Wochenplan (Symcon)</h3>
+    <div class="schedgrid" id="wpGrid">–</div>
+    <div class="wplegend" id="wpLegend"></div>
+    <div class="row2">
+      <div class="sub" style="flex:1">Schaltet die Stufe direkt über Symcon – das Gerät dabei auf Manuell lassen (AUTO aus). Zum Bearbeiten auf eine Zeile tippen.</div>
+      <button class="toggle" style="flex:none" onclick="openWp(-1)">Neue Gruppe</button>
+      <button class="toggle" style="flex:none" onclick="loadWeekplan(true)">Neu laden</button>
+    </div>
+  </div>
+
   <div class="tile c4only wide" id="tileZeit">
     <h3><span class="ico">📅</span>Zeitprogramm (AUTO-Modus)</h3>
     <div class="schedgrid" id="schedGrid">–</div>
@@ -567,6 +596,21 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
   </div>
 </div>
 
+<!-- Wochenplan-Editor -->
+<div class="overlay" id="wpOverlay">
+  <div class="pinbox" style="width:min(470px,94vw);max-height:92dvh;overflow-y:auto">
+    <div class="pintitle" id="wpTitle">Wochenplan</div>
+    <div class="wpdaychips" id="wpDays"></div>
+    <div id="wpPoints" style="display:flex;flex-direction:column;gap:8px"></div>
+    <button class="toggle" onclick="wpAddPoint()">+ Schaltpunkt</button>
+    <div class="row2">
+      <button class="toggle" onclick="saveWeekplan()">Speichern</button>
+      <button class="toggle" id="wpDelGroup" onclick="wpDeleteGroup()">Gruppe löschen</button>
+      <button class="toggle" onclick="closeWp()">Abbrechen</button>
+    </div>
+  </div>
+</div>
+
 <!-- Zeitprogramm-Editor -->
 <div class="overlay" id="schedOverlay">
   <div class="pinbox" style="width:min(440px,94vw);max-height:92dvh;overflow-y:auto">
@@ -689,9 +733,170 @@ function switchPage(p) {
   $('navAnlage').classList.toggle('active', p !== 'details');
   $('navDetails').classList.toggle('active', p === 'details');
   localStorage.setItem('pair_page', p);
-  if (p === 'details') loadSchedule(false);
+  if (p === 'details') { loadSchedule(false); loadWeekplan(false); }
 }
 switchPage(localStorage.getItem('pair_page') || 'anlage');
+
+// ---------- Symcon-Wochenplan ----------
+const WP_ACT = {
+  0: {n: 'Aus', c: '#808080'},
+  1: {n: 'Stufe 1 (Nacht)', c: '#3d9ee8'},
+  2: {n: 'Stufe 2', c: '#00a65e'},
+  3: {n: 'Stufe 3 (Lüften)', c: '#e8a33d'}
+};
+let WPLAN = null, wpLoading = false, wpGroup = -1, wpEdit = null;
+
+async function loadWeekplan(force) {
+  if (wpLoading || (WPLAN && !force)) return;
+  wpLoading = true;
+  try {
+    const r = await fetch('?weekplan=1', {cache: 'no-store'});
+    const j = await r.json();
+    if (!j.ok) throw new Error();
+    WPLAN = {groups: j.exists ? j.groups : null};
+    renderWeekplan();
+  } catch (e) {
+    $('wpGrid').textContent = 'Wochenplan konnte nicht gelesen werden – bitte „Neu laden“.';
+  }
+  wpLoading = false;
+}
+
+function daysLabel(mask) {
+  const days = [];
+  for (let d = 0; d < 7; d++) {
+    if (mask & (1 << d)) days.push(d);
+  }
+  if (days.length === 0) return '–';
+  if (days.length === 7) return 'Mo–So';
+  // zusammenhängenden Bereich kompakt schreiben
+  let contiguous = days.length > 2;
+  for (let i = 1; i < days.length; i++) {
+    if (days[i] !== days[i - 1] + 1) contiguous = false;
+  }
+  if (contiguous) return DAY_SHORT[days[0]] + '–' + DAY_SHORT[days[days.length - 1]];
+  return days.map(d => DAY_SHORT[d]).join(', ');
+}
+
+function wpBar(points) {
+  const pts = [...points].sort((a, b) => a.minute - b.minute);
+  const seg = (f, t, a) =>
+    `<div class="wpseg" style="left:${(f / 14.4).toFixed(2)}%;width:${((t - f) / 14.4).toFixed(2)}%;background:${WP_ACT[a] ? WP_ACT[a].c : '#555'}"></div>`;
+  let h = '';
+  for (let i = 0; i < pts.length; i++) {
+    h += seg(pts[i].minute, (i + 1 < pts.length) ? pts[i + 1].minute : 1440, pts[i].action);
+  }
+  // vor dem ersten Punkt gilt die Aktion vom Vortag (= letzter Punkt)
+  if (pts.length && pts[0].minute > 0) h += seg(0, pts[0].minute, pts[pts.length - 1].action);
+  return `<div class="wpbar">${h}</div>`;
+}
+
+function renderWeekplan() {
+  if (!WPLAN) return;
+  if (!WPLAN.groups) {
+    $('wpGrid').innerHTML = '<button class="toggle" onclick="createWeekplan()">Wochenplan jetzt anlegen (Vorlage: nachts Stufe 1, tagsüber Stufe 2, 2× Lüften)</button>';
+    $('wpLegend').innerHTML = '';
+    return;
+  }
+  let h = '';
+  WPLAN.groups.forEach((g, i) => {
+    h += `<div class="schedrow" onclick="openWp(${i})"><span class="wpdayslbl">${daysLabel(g.days)}</span>${wpBar(g.points)}</div>`;
+  });
+  $('wpGrid').innerHTML = h;
+  $('wpLegend').innerHTML = Object.values(WP_ACT).map(a => `<span><i style="background:${a.c}"></i>${a.n}</span>`).join('');
+}
+
+async function createWeekplan() {
+  try {
+    const ok = await sendPost({cmd: 'createWeekplan'});
+    if (ok === null) return;
+    if (ok === true) toast('✓ Wochenplan angelegt', 'ok');
+  } catch (e) {
+    toast('Anlegen fehlgeschlagen (' + e.message + ')');
+  }
+  loadWeekplan(true);
+}
+
+function openWp(idx) {
+  if (!D.writeEnabled || !WPLAN || !WPLAN.groups) return;
+  wpGroup = idx;
+  wpEdit = idx >= 0
+    ? JSON.parse(JSON.stringify(WPLAN.groups[idx]))
+    : {days: 0, points: [{minute: 0, action: 2}]};
+  $('wpTitle').textContent = idx >= 0 ? ('Wochenplan · ' + daysLabel(wpEdit.days)) : 'Neue Gruppe';
+  $('wpDelGroup').style.display = (idx >= 0 && WPLAN.groups.length > 1) ? '' : 'none';
+  renderWpEditor();
+  $('wpOverlay').classList.add('show');
+}
+
+function renderWpEditor() {
+  $('wpDays').innerHTML = DAY_SHORT.map((n, d) =>
+    `<button class="${(wpEdit.days & (1 << d)) ? 'on' : ''}" onclick="wpDayToggle(${d})">${n}</button>`).join('');
+
+  wpEdit.points.sort((a, b) => a.minute - b.minute);
+  $('wpPoints').innerHTML = wpEdit.points.map((p, i) => {
+    const acts = [0, 1, 2, 3].map(a =>
+      `<button class="${p.action === a ? 'active' : ''}" onclick="wpAct(${i},${a})">${a === 0 ? 'Aus' : a}</button>`).join('');
+    return `<div class="wppt">
+      <input class="wptime" inputmode="numeric" value="${fmtTime(p.minute)}" onfocus="this.select()"
+        onchange="wpTimeInput(this,${i})" onkeydown="if(event.key==='Enter')this.blur()">
+      <div class="nav" style="flex:1">${acts}</div>
+      <button class="wpdel" onclick="wpDelPoint(${i})">×</button>
+    </div>`;
+  }).join('');
+}
+
+function wpDayToggle(d) { wpEdit.days ^= (1 << d); renderWpEditor(); }
+function wpAct(i, a) { wpEdit.points[i].action = a; renderWpEditor(); }
+function wpDelPoint(i) { wpEdit.points.splice(i, 1); renderWpEditor(); }
+function wpAddPoint() { wpEdit.points.push({minute: 720, action: 2}); renderWpEditor(); }
+function wpTimeInput(inp, i) {
+  const v = parseTime(inp.value);
+  if (v === null) {
+    inp.value = fmtTime(wpEdit.points[i].minute);
+    toast('Ungültige Zeit – z. B. 6:30 oder 0630 eingeben');
+    return;
+  }
+  wpEdit.points[i].minute = Math.min(1439, v);
+  renderWpEditor();
+}
+function closeWp() { $('wpOverlay').classList.remove('show'); }
+
+async function saveWeekplan() {
+  if (wpEdit.days === 0) { toast('Bitte mindestens einen Wochentag auswählen'); return; }
+  if (wpEdit.points.length === 0) { toast('Bitte mindestens einen Schaltpunkt anlegen'); return; }
+  closeWp();
+  // gewählte Tage aus den anderen Gruppen herausnehmen (Tage sind exklusiv)
+  const groups = [];
+  WPLAN.groups.forEach((g, i) => {
+    if (i === wpGroup) return;
+    const days = g.days & ~wpEdit.days;
+    if (days) groups.push({days, points: g.points});
+  });
+  groups.push({days: wpEdit.days, points: wpEdit.points});
+  try {
+    const ok = await sendPost({cmd: 'setWeekplan', groups});
+    if (ok === null) return;
+    if (ok === false) { load(); return; }
+    toast('✓ Wochenplan gespeichert', 'ok');
+  } catch (e) {
+    toast('Wochenplan speichern fehlgeschlagen (' + e.message + ')');
+  }
+  loadWeekplan(true);
+}
+
+async function wpDeleteGroup() {
+  closeWp();
+  if (wpGroup < 0) return;
+  const groups = WPLAN.groups.filter((g, i) => i !== wpGroup);
+  try {
+    const ok = await sendPost({cmd: 'setWeekplan', groups});
+    if (ok === null) return;
+    if (ok === true) toast('✓ Gruppe gelöscht', 'ok');
+  } catch (e) {
+    toast('Löschen fehlgeschlagen (' + e.message + ')');
+  }
+  loadWeekplan(true);
+}
 
 // ---------- Zeitprogramm (C4) ----------
 const DAY_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
