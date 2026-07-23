@@ -411,11 +411,13 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
   </div>
 
   <div class="tile c4only wide" id="tileZeit">
-    <h3><span class="ico">📅</span>Zeitprogramm (AUTO-Modus)</h3>
-    <div class="schedgrid" id="schedGrid">–</div>
-    <div class="row2">
-      <div class="sub" style="flex:1">Im AUTO-Modus fährt das Gerät diese Zeitfenster; außerhalb der Fenster steht es auf Standby. Zum Bearbeiten auf einen Tag tippen.</div>
-      <button class="toggle" style="flex:none" onclick="loadSchedule(true)">Neu laden</button>
+    <h3 onclick="toggleZeit()" style="cursor:pointer"><span class="ico">📅</span>Geräte-Zeitprogramm (nur im AUTO-Modus aktiv)<span id="zeitChev" style="margin-left:auto">▸</span></h3>
+    <div id="zeitBody" style="display:none;flex-direction:column;gap:8px">
+      <div class="schedgrid" id="schedGrid">–</div>
+      <div class="row2">
+        <div class="sub" style="flex:1">Geräteinternes Programm (max. 3 Fenster/Tag, außerhalb Standby). Wird nur im AUTO-Modus gefahren – bei Nutzung des Symcon-Wochenplans nicht nötig. Zum Bearbeiten auf einen Tag tippen.</div>
+        <button class="toggle" style="flex:none" onclick="loadSchedule(true)">Neu laden</button>
+      </div>
     </div>
   </div>
 
@@ -727,15 +729,31 @@ async function resetAlarms() {
 }
 
 // ---------- Seiten-Umschaltung ----------
+// (der Start-Aufruf steht am Skriptende, damit alle Variablen initialisiert sind)
 function switchPage(p) {
   $('pageAnlage').style.display = (p === 'details') ? 'none' : '';
   $('pageDetails').style.display = (p === 'details') ? '' : 'none';
   $('navAnlage').classList.toggle('active', p !== 'details');
   $('navDetails').classList.toggle('active', p === 'details');
   localStorage.setItem('pair_page', p);
-  if (p === 'details') { loadSchedule(false); loadWeekplan(false); }
+  if (p === 'details') {
+    loadWeekplan(false);
+    if (zeitOpen) loadSchedule(false);
+  }
 }
-switchPage(localStorage.getItem('pair_page') || 'anlage');
+
+// Geräte-Zeitprogramm ein-/ausklappen (Wochenplan ist das primäre Werkzeug)
+let zeitOpen = localStorage.getItem('pair_zeit_open') === '1';
+function toggleZeit() {
+  zeitOpen = !zeitOpen;
+  localStorage.setItem('pair_zeit_open', zeitOpen ? '1' : '0');
+  applyZeitOpen();
+  if (zeitOpen) loadSchedule(false);
+}
+function applyZeitOpen() {
+  $('zeitBody').style.display = zeitOpen ? 'flex' : 'none';
+  $('zeitChev').textContent = zeitOpen ? '▾' : '▸';
+}
 
 // ---------- Symcon-Wochenplan ----------
 const WP_ACT = {
@@ -1302,8 +1320,10 @@ function render() {
   $('tileStufenZu').style.display = (c4 && D.modeset !== false) ? '' : 'none';
   $('tileStufenAb').style.display = (c4 && D.modeset !== false) ? '' : 'none';
 
-  // Zeitprogramm nachladen, sobald Steuerung bekannt und Details sichtbar
-  if (c4 && !SCHED && $('pageDetails').style.display !== 'none') loadSchedule(false);
+  // Zeitprogramm/Wochenplan nachladen, sobald Details sichtbar
+  const detailsVisible = $('pageDetails').style.display !== 'none';
+  if (c4 && !SCHED && zeitOpen && detailsVisible) loadSchedule(false);
+  if (!WPLAN && !wpLoading && detailsVisible) loadWeekplan(false);
 
   $('footinfo').textContent = 'Poloplast POLO-AIR · Modbus TCP'
     + (D.ctrl && D.ctrl !== '?' ? ' · Steuerung ' + (c4 ? 'C4 (PING2)' : 'C6') : '')
@@ -1319,6 +1339,9 @@ async function load() {
   } catch (e) { /* nächster Zyklus */ }
 }
 
+// Startzustand erst hier herstellen – ab jetzt sind alle Variablen initialisiert
+applyZeitOpen();
+switchPage(localStorage.getItem('pair_page') || 'anlage');
 load();
 setInterval(load, 10000);
 </script>
