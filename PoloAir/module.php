@@ -279,6 +279,7 @@ class PoloAir extends IPSModule
             return false;
         }
 
+        $this->syncWeekplanActive();
         $this->SetValueSafe('LastUpdate', time());
         $this->persistAvail();
         $this->SetStatus(102);
@@ -508,6 +509,18 @@ class PoloAir extends IPSModule
 
     public function RequestAction($Ident, $Value)
     {
+        // Wochenplan aktivieren/pausieren ist kein Modbus-Register
+        if ($Ident === 'WochenplanAktiv') {
+            if (!$this->ReadPropertyBoolean('EnableWrite')) {
+                $this->LogMessage('Schreibzugriff ist in der Instanzkonfiguration deaktiviert.', KL_WARNING);
+                return;
+            }
+            if (!$this->SetWeekplanActive((bool) $Value)) {
+                throw new Exception('Kein Wochenplan vorhanden – zuerst über die Instanzkonfiguration oder das Dashboard anlegen.');
+            }
+            return;
+        }
+
         $map = $this->writeMap();
         if (!isset($map[$Ident])) {
             throw new Exception('Unbekannter Ident: ' . $Ident);
@@ -693,7 +706,8 @@ class PoloAir extends IPSModule
             $payload = json_decode(file_get_contents('php://input'), true);
             $ident = (string) ($payload['ident'] ?? '');
             $cmd = (string) ($payload['cmd'] ?? '');
-            if (!in_array($cmd, ['resetAlarms', 'setScheduleDay', 'setWeekplan', 'createWeekplan'], true) && !isset($this->writeMap()[$ident])) {
+            if (!in_array($cmd, ['resetAlarms', 'setScheduleDay', 'setWeekplan', 'createWeekplan'], true)
+                && $ident !== 'WochenplanAktiv' && !isset($this->writeMap()[$ident])) {
                 http_response_code(400);
                 echo json_encode(['ok' => false, 'error' => 'invalid ident']);
                 return;
@@ -764,7 +778,7 @@ class PoloAir extends IPSModule
     {
         $idents = [
             // gemeinsam
-            'Power', 'AutoMode', 'StatusText', 'Ventilator', 'Rotor', 'Heizen', 'Kuehlen',
+            'Power', 'AutoMode', 'WochenplanAktiv', 'StatusText', 'Ventilator', 'Rotor', 'Heizen', 'Kuehlen',
             'Stoerung', 'Warnung', 'AlarmText',
             'ZuluftTemp', 'WasserTemp', 'ZuluftVent', 'AbluftVent', 'Waermetauscher', 'ElHeizer',
             'Firmware', 'LastUpdate',
@@ -1530,6 +1544,7 @@ class PoloAir extends IPSModule
             ['Power', 'Gerät Ein/Aus', 0, '~Switch', 10, true, $w],
             ['StatusText', 'Status', 3, '', 14, true, false],
             ['AutoMode', 'AUTO-Modus', 0, '~Switch', 13, true, $w],
+            ['WochenplanAktiv', 'Wochenplan aktiv', 0, '~Switch', 17, true, $w],
             ['Ventilator', 'Ventilatoren', 0, 'PAIR.Aktiv', 20, true, false],
             ['Rotor', 'Wärmetauscher aktiv', 0, 'PAIR.Aktiv', 21, true, false],
             ['Heizen', 'Heizen', 0, 'PAIR.Aktiv', 22, true, false],
@@ -1875,6 +1890,35 @@ class PoloAir extends IPSModule
             "Bearbeiten: im Dashboard (Details -> Wochenplan) oder im Wochenplan-Editor der Konsole.\n" .
             "WICHTIG: Den AUTO-Modus des Geräts ausschalten, damit sich das " .
             "interne Zeitprogramm und der Symcon-Plan nicht in die Quere kommen.";
+    }
+
+    /**
+     * Aktiviert oder pausiert den Symcon-Wochenplan (das Ereignis selbst).
+     * Pausiert schaltet der Plan nichts mehr – die zuletzt gestellte Stufe bleibt.
+     */
+    public function SetWeekplanActive(bool $Active): bool
+    {
+        $eid = @IPS_GetObjectIDByIdent('Wochenplan', $this->InstanceID);
+        if ($eid === false || $eid <= 0) {
+            return false;
+        }
+        IPS_SetEventActive($eid, $Active);
+        $this->SetValueSafe('WochenplanAktiv', $Active);
+        return true;
+    }
+
+    /**
+     * Gleicht die Statusvariable mit dem tatsächlichen Ereignis-Zustand ab
+     * (falls der Plan in der Konsole geschaltet wurde).
+     */
+    private function syncWeekplanActive(): void
+    {
+        $eid = @IPS_GetObjectIDByIdent('Wochenplan', $this->InstanceID);
+        if ($eid === false || $eid <= 0) {
+            return;
+        }
+        $ev = IPS_GetEvent($eid);
+        $this->SetValueSafe('WochenplanAktiv', (bool) $ev['EventActive']);
     }
 
     /**

@@ -126,6 +126,7 @@ Aufruf: `http://<Symcon-IP>:3777/hook/poloair`
 | `PAIR_SetScheduleDay(int $id, int $Day, string $EventsJSON)` | C4: Einen Wochentag schreiben (0 = Mo … 6 = So), z. B. `PAIR_SetScheduleDay($id, 0, '[{"start":360,"stop":1320,"level":2},{"start":0,"stop":0,"level":0},{"start":0,"stop":0,"level":0}]');` |
 | `PAIR_CreateWeekplan(int $id)` | Legt einen **IPS-Wochenplan** unter der Instanz an, der die Stufe schaltet (Aktionen: Aus, Stufe 1–3). Flexibler als das Geräte-Zeitprogramm: beliebig viele Schaltpunkte, Zeiten über Mitternacht, grafische Bearbeitung. Gerät dabei auf Manuell lassen (AUTO aus). |
 | `PAIR_ScheduleAction(int $id, int $Level)` | Schaltziel des Wochenplans: 0 = Gerät aus, 1–3 = Stufe (schaltet bei Bedarf ein und von AUTO auf Manuell). Auch für eigene Skripte/Automationen nutzbar. |
+| `PAIR_SetWeekplanActive(int $id, bool $Active)` | Wochenplan aktivieren/pausieren. Alternativ über die Variable **„Wochenplan aktiv"** oder den Button in der Dashboard-Kachel; pausiert bleibt die zuletzt gestellte Stufe stehen (z. B. für Urlaub). |
 
 ### Geräte-Zeitprogramm vs. Symcon-Wochenplan
 

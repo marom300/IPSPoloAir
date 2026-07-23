@@ -405,6 +405,7 @@ footer{color:var(--dim);font-size:10px;text-align:center;padding:2px 0 6px}
     <div class="wplegend" id="wpLegend"></div>
     <div class="row2">
       <div class="sub" style="flex:1">Schaltet die Stufe direkt über Symcon – das Gerät dabei auf Manuell lassen (AUTO aus). Zum Bearbeiten auf eine Zeile tippen.</div>
+      <button class="toggle" style="flex:none" id="btnWpActive" onclick="setVal('WochenplanAktiv', !D.WochenplanAktiv)">Plan aktiv</button>
       <button class="toggle" style="flex:none" onclick="openWp(-1)">Neue Gruppe</button>
       <button class="toggle" style="flex:none" onclick="loadWeekplan(true)">Neu laden</button>
     </div>
@@ -1319,6 +1320,15 @@ function render() {
   $('tileAQ').style.display = (c4 || D.aq === false) ? 'none' : '';
   $('tileStufenZu').style.display = (c4 && D.modeset !== false) ? '' : 'none';
   $('tileStufenAb').style.display = (c4 && D.modeset !== false) ? '' : 'none';
+
+  // Wochenplan aktiv/pausiert
+  const bw = $('btnWpActive');
+  if (has('WochenplanAktiv')) {
+    bw.textContent = D.WochenplanAktiv ? 'Plan aktiv' : 'Plan pausiert';
+    bw.classList.toggle('on', !!D.WochenplanAktiv);
+    bw.disabled = !D.writeEnabled;
+    $('wpGrid').style.opacity = D.WochenplanAktiv ? '' : '.45';
+  }
 
   // Zeitprogramm/Wochenplan nachladen, sobald Details sichtbar
   const detailsVisible = $('pageDetails').style.display !== 'none';
